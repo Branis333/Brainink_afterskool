@@ -1,0 +1,49 @@
+{
+  "expo": {
+    "name": "Skana",
+    "slug": "skana-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "platforms": [
+      "ios",
+      "android"
+    ],
+    "icon": "./assets/brain-logo.png",
+    "splash": {
+      "image": "./assets/brain-logo.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.brainink.skana"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/brain-logo.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.brainink.skana",
+      "versionCode": 1,
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+    "scheme": "skana",
+    "extra": {
+      "eas": {
+        "projectId": "b0fd16c0-eba5-40ec-9111-b75531ab039b"
+      }
+    },
+    "plugins": [
+      "expo-font",
+      "expo-secure-store"
+    ]
+  }
+}

@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Download Skana Mobile App</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #00BFFF 0%, #0088CC 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 600px;
+            text-align: center;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+
+        .app-icon {
+            width: 100px;
+            height: 100px;
+            margin: 0 auto 20px;
+            background: #00BFFF;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 48px;
+            color: white;
+            background-image: url('./assets/brain-logo.png');
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: center;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.2em;
+        }
+
+        .download-btn {
+            background: linear-gradient(45deg, #00BFFF, #0088CC);
+            color: white;
+            padding: 18px 40px;
+            text-decoration: none;
+            border-radius: 50px;
+            font-size: 1.3em;
+            font-weight: bold;
+            display: inline-block;
+            margin: 20px 0;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 191, 255, 0.4);
+        }
+
+        .download-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 191, 255, 0.6);
+        }
+
+        .version-info {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            color: #666;
+        }
+
+        .instructions {
+            text-align: left;
+            margin: 30px 0;
+            background: #f8f9fa;
+            padding: 25px;
+            border-radius: 15px;
+        }
+
+        .instructions h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+
+        .instructions ol {
+            padding-left: 20px;
+        }
+
+        .instructions li {
+            margin: 10px 0;
+            line-height: 1.6;
+        }
+
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin: 30px 0;
+        }
+
+        .feature {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: left;
+        }
+
+        .feature-icon {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+
+        .security-note {
+            background: #e3f2fd;
+            border: 1px solid #00BFFF;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            color: #0277bd;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                margin: 20px;
+                padding: 30px 20px;
+            }
+            
+            h1 {
+                font-size: 2em;
+            }
+            
+            .download-btn {
+                padding: 15px 30px;
+                font-size: 1.1em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="app-icon">🧠</div>
+        <h1>Skana Mobile App</h1>
+        <p class="subtitle">School Image Management System</p>
+        
+        <div class="features">
+            <div class="feature">
+                <div class="feature-icon">🔐</div>
+                <h4>Secure Authentication</h4>
+                <p>Role-based access for teachers and principals</p>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">🏫</div>
+                <h4>School Management</h4>
+                <p>Multi-school support with proper authorization</p>
+            </div>
+            <div class="feature">
+                <div class="feature-icon">📸</div>
+                <h4>Image Upload</h4>
+                <p>Camera capture and gallery selection</p>
+            </div>
+        </div>
+
+        <a href="/downloads/skana-mobile-v1.0.0.apk" 
+           class="download-btn"
+           download="skana-mobile-v1.0.0.apk">
+            📥 Download APK for Android
+        </a>
+
+        <div class="version-info">
+            <strong>Version 1.0.0</strong> • File size: ~50MB • Last updated: August 27, 2025
+        </div>
+
+        <div class="security-note">
+            <strong>🛡️ Security Notice:</strong> This is the official Skana app from BrainInk. 
+            Our APK is signed and secure for installation.
+        </div>
+
+        <div class="instructions">
+            <h3>📋 Installation Instructions</h3>
+            <ol>
+                <li><strong>Download the APK:</strong> Click the download button above to save the APK file to your Android device.</li>
+                <li><strong>Enable Unknown Sources:</strong> 
+                    <ul>
+                        <li>Go to Settings → Security → Unknown Sources</li>
+                        <li>Enable "Allow installation from unknown sources"</li>
+                        <li>Or Settings → Apps → Special Access → Install Unknown Apps</li>
+                    </ul>
+                </li>
+                <li><strong>Install the App:</strong> Open your file manager, find the downloaded APK, and tap to install.</li>
+                <li><strong>Launch Skana:</strong> Find the app in your app drawer and start using it!</li>
+            </ol>
+        </div>
+
+        <div class="instructions">
+            <h3>📞 Support</h3>
+            <p>Need help? Contact our support team:</p>
+            <ul>
+                <li>Email: support@brainink.com</li>
+                <li>Website: https://brainink.com</li>
+                <li>For technical issues with installation</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>
