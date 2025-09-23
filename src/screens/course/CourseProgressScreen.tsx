@@ -332,7 +332,7 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
                                     </Text>
                                 </View>
 
-                                {session.ai_score && (
+                                {session.ai_score !== undefined && session.ai_score !== null && (
                                     <View style={styles.sessionDetailItem}>
                                         <Text style={styles.sessionDetailLabel}>AI Score:</Text>
                                         <Text style={styles.sessionDetailValue}>
@@ -342,7 +342,7 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
                                 )}
                             </View>
 
-                            {session.ai_feedback && (
+                            {typeof session.ai_feedback === 'string' && session.ai_feedback.trim().length > 0 && (
                                 <View style={styles.feedbackContainer}>
                                     <Text style={styles.feedbackTitle}>AI Feedback:</Text>
                                     <Text style={styles.feedbackText} numberOfLines={3}>

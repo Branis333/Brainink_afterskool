@@ -321,7 +321,7 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
             </View>
 
             {/* Course Description */}
-            {course.description && (
+            {typeof course.description === 'string' && course.description.trim().length > 0 && (
                 <Text style={styles.courseDescription} numberOfLines={3}>
                     {course.description}
                 </Text>

@@ -303,7 +303,7 @@ export const UploadsOverviewScreen: React.FC<Props> = ({ navigation }) => {
                                 </Text>
                             </View>
 
-                            {upload.ai_feedback && (
+                            {typeof upload.ai_feedback === 'string' && upload.ai_feedback.trim().length > 0 && (
                                 <Text style={styles.uploadFeedback} numberOfLines={2}>
                                     {upload.ai_feedback}
                                 </Text>

@@ -214,7 +214,7 @@ export const GradeDetailsScreen: React.FC = () => {
                 </View>
 
                 {/* Quick Feedback Preview */}
-                {submission.ai_feedback && (
+                {typeof submission.ai_feedback === 'string' && submission.ai_feedback.trim().length > 0 && (
                     <View style={styles.previewSection}>
                         <Text style={styles.sectionTitle}>AI Feedback Preview</Text>
                         <Text style={styles.previewText} numberOfLines={3}>

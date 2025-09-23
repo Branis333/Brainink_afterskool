@@ -498,7 +498,7 @@ export const SubmissionsManagementScreen: React.FC = () => {
                 <Text style={styles.resultsCount}>
                     {filteredSubmissions.length} submission{filteredSubmissions.length !== 1 ? 's' : ''}
                 </Text>
-                {(filters.status !== 'all' || filters.type !== 'all' || searchQuery) && (
+                {((filters.status !== 'all') || (filters.type !== 'all') || (searchQuery.length > 0)) && (
                     <TouchableOpacity
                         style={styles.clearFiltersButton}
                         onPress={() => {

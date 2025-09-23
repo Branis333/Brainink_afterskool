@@ -20,21 +20,6 @@ export interface FileValidationResult {
     error?: string;
 }
 
-export interface UploadFile {
-    uri: string;
-    name: string;
-    type: string;
-    size?: number;
-}
-
-// AI Submission Interfaces
-export interface AISubmissionCreate {
-    course_id: number;
-    lesson_id: number;
-    session_id: number;
-    submission_type: 'homework' | 'quiz' | 'practice' | 'assessment';
-}
-
 export interface AISubmission {
     id: number;
     user_id: number;
@@ -58,6 +43,14 @@ export interface AISubmission {
     submitted_at: string;
     processed_at?: string;
     reviewed_at?: string;
+}
+
+// Simple file shape used by RN for uploads
+export interface UploadFile {
+    name: string;
+    uri: string;
+    type: string;
+    size?: number;
 }
 
 // Bulk PDF Upload Interfaces
@@ -98,6 +91,13 @@ export interface AIGradingResponse {
     ai_strengths?: string;
     ai_improvements?: string;
     processed_at: string;
+}
+
+export interface AISubmissionCreate {
+    course_id: number;
+    lesson_id: number;
+    session_id: number;
+    submission_type: 'homework' | 'quiz' | 'practice' | 'assessment';
 }
 
 // Submission Management Interfaces
@@ -156,9 +156,13 @@ class UploadsService {
         }
 
         const headers: HeadersInit = {
-            'Authorization': `Bearer ${token}`,
-            'Content-Type': 'application/json'
+            'Authorization': `Bearer ${token}`
         };
+
+        // Only set JSON content type when sending a body
+        if ((method === 'POST' || method === 'PUT')) {
+            headers['Content-Type'] = 'application/json';
+        }
 
         const config: RequestInit = {
             method,
@@ -172,9 +176,16 @@ class UploadsService {
         const response = await fetch(`${getBackendUrl()}${endpoint}`, config);
 
         if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            const errorMessage = errorData.detail || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
-            console.error('API Error:', errorData);
+            // Try parse JSON error, otherwise text, otherwise status
+            const text = await response.text().catch(() => '');
+            let errorMessage = `HTTP ${response.status}: ${response.statusText}`;
+            try {
+                const errorData = text ? JSON.parse(text) : {};
+                errorMessage = errorData.detail || errorData.message || errorMessage;
+                console.error('API Error:', errorData);
+            } catch {
+                console.error('API Error (raw):', text);
+            }
             throw new Error(errorMessage);
         }
 
@@ -755,25 +766,21 @@ class UploadsService {
      */
     async getUserRecentSubmissions(token: string, limit: number = 10): Promise<AISubmission[]> {
         try {
+            // Enforce backend constraint: limit must be <= 50 per API validation
+            const safeLimit = Math.min(Math.max(1, Math.floor(limit || 10)), 50);
             console.log('📋 Fetching recent submissions for user...');
 
-            const response = await fetch(`${getBackendUrl()}/after-school/uploads/user/recent-submissions?limit=${limit}`, {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                },
-            });
+            const response = await this.makeAuthenticatedRequest(
+                `/after-school/uploads/user/recent-submissions?limit=${encodeURIComponent(safeLimit)}`,
+                token
+            );
 
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            const submissions: AISubmission[] = await response.json();
+            const data = await response.json();
+            const submissions: AISubmission[] = Array.isArray(data) ? data : [];
             console.log(`✅ User recent submissions fetched successfully: ${submissions.length} submissions`);
             return submissions;
         } catch (error) {
-            console.error('❌ Error fetching user recent submissions:', error);
+            console.error('❌ Error fetching user recent submissions:', error?.message || error);
             return [];
         }
     }
@@ -793,17 +800,10 @@ class UploadsService {
         try {
             console.log('📊 Fetching user upload statistics...');
 
-            const response = await fetch(`${getBackendUrl()}/after-school/uploads/user/statistics`, {
-                method: 'GET',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                },
-            });
-
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
+            const response = await this.makeAuthenticatedRequest(
+                `/after-school/uploads/user/statistics`,
+                token
+            );
 
             const stats = await response.json();
             console.log('✅ User upload statistics fetched successfully');
@@ -817,7 +817,7 @@ class UploadsService {
                 thisMonthUploads: stats.this_month_uploads || 0,
             };
         } catch (error) {
-            console.error('❌ Error fetching user upload stats:', error);
+            console.error('❌ Error fetching user upload statistics:', (error as any)?.message || error);
             return {
                 totalUploads: 0,
                 totalSizeUploaded: 0,

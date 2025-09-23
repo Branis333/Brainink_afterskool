@@ -77,6 +77,7 @@ export const UploadsManagementScreen: React.FC<Props> = ({ navigation }) => {
             setIsLoading(true);
 
             // Load real user submissions data
+            // Backend enforces limit <= 50
             const userSubmissions = await uploadsService.getUserRecentSubmissions(token, 50);
             setSubmissions(userSubmissions);
 
@@ -370,7 +371,7 @@ export const UploadsManagementScreen: React.FC<Props> = ({ navigation }) => {
                 </View>
             </View>
 
-            {item.ai_feedback && (
+            {typeof item.ai_feedback === 'string' && item.ai_feedback.trim().length > 0 && (
                 <Text style={styles.submissionFeedback} numberOfLines={2}>
                     {item.ai_feedback}
                 </Text>

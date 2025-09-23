@@ -98,8 +98,8 @@ export const UploadHistoryScreen: React.FC<Props> = ({ navigation }) => {
         try {
             setIsLoading(true);
 
-            // Load real user submissions with larger limit for history
-            const allSubmissions = await uploadsService.getUserRecentSubmissions(token, 100);
+            // Load real user submissions (backend max limit is 50)
+            const allSubmissions = await uploadsService.getUserRecentSubmissions(token, 50);
 
             const filteredSubmissions = filterSubmissionsByPeriod(allSubmissions, selectedPeriod);
             const grouped = groupSubmissionsByDate(filteredSubmissions);
@@ -575,7 +575,7 @@ export const UploadHistoryScreen: React.FC<Props> = ({ navigation }) => {
                                         <View style={styles.timelineEntryContent}>
                                             <Text style={styles.timelineEntryAction}>{entry.actionDescription}</Text>
                                             <Text style={styles.timelineEntryTime}>{formatTime(entry.date)}</Text>
-                                            {entry.action === 'graded' && entry.submission.ai_score && (
+                                            {entry.action === 'graded' && entry.submission.ai_score !== undefined && entry.submission.ai_score !== null && (
                                                 <View
                                                     style={[
                                                         styles.scoreChip,

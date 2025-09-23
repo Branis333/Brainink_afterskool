@@ -268,7 +268,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
             )}
 
             {/* Course Description */}
-            {course.description && (
+            {typeof course.description === 'string' && course.description.trim().length > 0 && (
                 <View style={styles.descriptionContainer}>
                     <Text style={styles.descriptionText}>{course.description}</Text>
                 </View>
@@ -322,7 +322,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                         <Text style={[styles.lessonDuration, !isAvailable && styles.disabledText]}>
                             {formatDuration(lesson.estimated_duration)}
                         </Text>
-                        {lesson.learning_objectives && (
+                        {typeof lesson.learning_objectives === 'string' && lesson.learning_objectives.trim().length > 0 && (
                             <Text style={[styles.lessonObjectives, !isAvailable && styles.disabledText]} numberOfLines={2}>
                                 {lesson.learning_objectives}
                             </Text>

@@ -84,7 +84,7 @@ export const BottomTabs: React.FC<BottomTabsProps> = ({
                             size={isActive ? 26 : 24}
                             color={isActive ? activeColor : inactiveColor}
                         />
-                        {tab.badge && tab.badge > 0 && (
+                        {(tab.badge ?? 0) > 0 && (
                             <View style={[styles.badge, { backgroundColor: '#ff3b30' }]}>
                                 <Text style={styles.badgeText}>
                                     {tab.badge > 99 ? '99+' : tab.badge.toString()}

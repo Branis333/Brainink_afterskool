@@ -326,7 +326,7 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                     <Text style={styles.assignmentDetailValue}>{assignment.maxScore} points</Text>
                 </View>
 
-                {assignment.dueDate && (
+                {Boolean(assignment.dueDate) && (
                     <View style={styles.assignmentDetailItem}>
                         <Text style={styles.assignmentDetailLabel}>Due Date:</Text>
                         <Text style={[
@@ -339,7 +339,7 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                     </View>
                 )}
 
-                {assignment.submission?.ai_score && (
+                {assignment.submission?.ai_score !== undefined && assignment.submission?.ai_score !== null && (
                     <View style={styles.assignmentDetailItem}>
                         <Text style={styles.assignmentDetailLabel}>Score:</Text>
                         <Text style={styles.scoreText}>
@@ -356,7 +356,7 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                 </Text>
             </View>
 
-            {assignment.submission?.ai_feedback && (
+            {typeof assignment.submission?.ai_feedback === 'string' && assignment.submission?.ai_feedback.trim().length > 0 && (
                 <View style={styles.feedbackContainer}>
                     <Text style={styles.feedbackTitle}>AI Feedback:</Text>
                     <Text style={styles.feedbackText} numberOfLines={3}>

@@ -323,7 +323,7 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
         <ScrollView style={styles.contentScrollView} showsVerticalScrollIndicator={false}>
             <View style={styles.contentContainer}>
                 {/* Learning Objectives */}
-                {lesson.learning_objectives && (
+                {typeof lesson.learning_objectives === 'string' && lesson.learning_objectives.trim().length > 0 && (
                     <View style={styles.objectivesCard}>
                         <Text style={styles.objectivesTitle}>Learning Objectives</Text>
                         <Text style={styles.objectivesText}>{lesson.learning_objectives}</Text>

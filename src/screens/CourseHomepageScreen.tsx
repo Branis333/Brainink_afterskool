@@ -214,7 +214,7 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
                 </View>
 
                 {/* Course Description */}
-                {course.description && (
+                {typeof course.description === 'string' && course.description.trim().length > 0 && (
                     <Text style={styles.courseDescription} numberOfLines={2}>
                         {course.description}
                     </Text>
@@ -260,9 +260,9 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
                                 {session.started_at ? new Date(session.started_at).toLocaleDateString() : 'Unknown date'} • {session.duration_minutes ? `${formatStudyTime(session.duration_minutes)}` : 'In progress'}
                             </Text>
                         </View>
-                        {session.ai_score && (
+                        {session.ai_score !== undefined && session.ai_score !== null && (
                             <View style={styles.scoreContainer}>
-                                <Text style={styles.scoreText}>{Math.round(session.ai_score || 0)}%</Text>
+                                <Text style={styles.scoreText}>{Math.round(Number(session.ai_score))}%</Text>
                             </View>
                         )}
                     </View>

@@ -270,7 +270,7 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
             </View>
 
             {/* Learning Objectives */}
-            {lesson.learning_objectives && (
+            {typeof lesson.learning_objectives === 'string' && lesson.learning_objectives.trim().length > 0 && (
                 <View style={styles.objectivesContainer}>
                     <Text style={styles.objectivesTitle}>Learning Objectives</Text>
                     <Text style={styles.objectivesText}>{lesson.learning_objectives}</Text>
