@@ -21,7 +21,8 @@ import {
     gradesService,
     AISubmission,
     StudySession,
-    StudentProgress
+    StudentProgress,
+    StudentAssignment
 } from '../../services/gradesService';
 
 const { width } = Dimensions.get('window');

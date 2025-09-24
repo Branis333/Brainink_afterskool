@@ -16,7 +16,7 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../navigation/AppNavigatorNew';
 import { useAuth } from '../../context/AuthContext';
-import { gradesService, LearningAnalytics, StudentProgress, AISubmission } from '../../services/gradesService';
+import { gradesService, LearningAnalytics, StudentProgress, AISubmission, StudentAssignment } from '../../services/gradesService';
 
 const { width } = Dimensions.get('window');
 
@@ -31,6 +31,16 @@ export const GradesOverviewScreen: React.FC = () => {
     const [progress, setProgress] = useState<StudentProgress[]>([]);
     const [recentSubmissions, setRecentSubmissions] = useState<AISubmission[]>([]);
     const [overallGrade, setOverallGrade] = useState<number | null>(null);
+    const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
+    const [workflowStatus, setWorkflowStatus] = useState<{
+        hasAvailableAssignments: boolean;
+        nextAction: string;
+        canContinue: boolean;
+    }>({
+        hasAvailableAssignments: false,
+        nextAction: 'No assignments available',
+        canContinue: false
+    });
 
     const loadGradesData = async (isRefresh = false) => {
         if (!token) {
@@ -81,6 +91,31 @@ export const GradesOverviewScreen: React.FC = () => {
                 }
             }
 
+            // Load student assignments for workflow integration
+            if (user?.id) {
+                try {
+                    const assignmentsData = await gradesService.getStudentAssignments(user.id, token, { limit: 10 });
+                    setAssignments(assignmentsData);
+
+                    // Determine workflow status
+                    const availableAssignments = assignmentsData.filter(a => a.status === 'assigned');
+                    const canContinueWorkflow = availableAssignments.length > 0 || assignmentsData.some(a => a.status === 'graded');
+
+                    setWorkflowStatus({
+                        hasAvailableAssignments: availableAssignments.length > 0,
+                        nextAction: availableAssignments.length > 0
+                            ? `${availableAssignments.length} assignments ready`
+                            : assignmentsData.some(a => a.status === 'graded')
+                                ? 'View recent results'
+                                : 'Complete course content to unlock assignments',
+                        canContinue: canContinueWorkflow
+                    });
+                } catch (error) {
+                    console.warn('Error loading assignments:', error);
+                    setAssignments([]);
+                }
+            }
+
         } catch (error) {
             console.error('Error loading grades data:', error);
             Alert.alert('Error', 'Failed to load grades data. Please try again.');
@@ -112,6 +147,76 @@ export const GradesOverviewScreen: React.FC = () => {
         if (score >= 60) return 'D';
         return 'F';
     };
+
+    // Workflow Navigation Functions
+    const navigateToNextAssignment = () => {
+        const nextAssignment = assignments.find(a => a.status === 'assigned');
+        if (nextAssignment) {
+            navigation.navigate('CourseAssignments', {
+                courseId: nextAssignment.course_id,
+                courseTitle: `Course ${nextAssignment.course_id}`
+            });
+        }
+    };
+
+    const continueWorkflowCycle = () => {
+        // Navigate back to course homepage to continue the learning cycle
+        navigation.navigate('CourseHomepage');
+    };
+
+    const navigateToRecentResults = () => {
+        const recentGradedAssignment = assignments.find(a => a.status === 'graded');
+        if (recentGradedAssignment) {
+            navigation.navigate('GradeDetails', {
+                submissionId: recentGradedAssignment.id,
+                submissionType: 'homework' as const
+            });
+        }
+    };
+
+    const renderWorkflowStatusCard = () => (
+        <View style={styles.workflowCard}>
+            <View style={styles.workflowHeader}>
+                <Ionicons
+                    name={workflowStatus.hasAvailableAssignments ? "checkmark-circle" : "time"}
+                    size={24}
+                    color={workflowStatus.hasAvailableAssignments ? "#28a745" : "#FFC107"}
+                />
+                <Text style={styles.workflowTitle}>Learning Workflow</Text>
+            </View>
+            <Text style={styles.workflowStatus}>{workflowStatus.nextAction}</Text>
+
+            {workflowStatus.canContinue && (
+                <View style={styles.workflowActions}>
+                    {workflowStatus.hasAvailableAssignments ? (
+                        <TouchableOpacity
+                            style={styles.workflowButton}
+                            onPress={navigateToNextAssignment}
+                        >
+                            <Text style={styles.workflowButtonText}>Start Assignment</Text>
+                            <Ionicons name="arrow-forward" size={16} color="#fff" />
+                        </TouchableOpacity>
+                    ) : (
+                        <TouchableOpacity
+                            style={[styles.workflowButton, styles.workflowButtonSecondary]}
+                            onPress={navigateToRecentResults}
+                        >
+                            <Text style={[styles.workflowButtonText, styles.workflowButtonTextSecondary]}>
+                                View Results
+                            </Text>
+                            <Ionicons name="eye" size={16} color="#007AFF" />
+                        </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
+                        style={styles.continueButton}
+                        onPress={continueWorkflowCycle}
+                    >
+                        <Text style={styles.continueButtonText}>Continue Learning</Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+        </View>
+    );
 
     const renderGradeSummaryCard = () => (
         <View style={styles.summaryCard}>
@@ -335,6 +440,7 @@ export const GradesOverviewScreen: React.FC = () => {
                 }
                 showsVerticalScrollIndicator={false}
             >
+                {renderWorkflowStatusCard()}
                 {renderGradeSummaryCard()}
                 {renderQuickActionsCard()}
                 {renderRecentGradesCard()}
@@ -615,6 +721,79 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: '#D1D5DB',
         marginTop: 4,
+        textAlign: 'center',
+    },
+    // Workflow Status Card Styles
+    workflowCard: {
+        backgroundColor: '#fff',
+        borderRadius: 12,
+        padding: 16,
+        marginHorizontal: 16,
+        marginBottom: 16,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
+        borderLeftWidth: 4,
+        borderLeftColor: '#007AFF',
+    },
+    workflowHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    workflowTitle: {
+        fontSize: 18,
+        fontWeight: '600',
+        color: '#1a1a1a',
+        marginLeft: 8,
+    },
+    workflowStatus: {
+        fontSize: 14,
+        color: '#666',
+        marginBottom: 16,
+    },
+    workflowActions: {
+        flexDirection: 'row',
+        gap: 12,
+    },
+    workflowButton: {
+        backgroundColor: '#007AFF',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        flex: 1,
+    },
+    workflowButtonSecondary: {
+        backgroundColor: '#F0F8FF',
+        borderWidth: 1,
+        borderColor: '#007AFF',
+    },
+    workflowButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    workflowButtonTextSecondary: {
+        color: '#007AFF',
+    },
+    continueButton: {
+        backgroundColor: '#F8F9FA',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#DEE2E6',
+        flex: 1,
+    },
+    continueButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#495057',
         textAlign: 'center',
     },
     bottomSpace: {

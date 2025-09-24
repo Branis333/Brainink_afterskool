@@ -24,7 +24,8 @@ import {
     StudentProgress,
     StudySession,
     CourseWithLessons,
-    CourseLesson
+    CourseLesson,
+    StudentAssignment
 } from '../../services/afterSchoolService';
 import { gradesService } from '../../services/gradesService';
 
@@ -45,9 +46,10 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
     const [progress, setProgress] = useState<StudentProgress | null>(null);
     const [course, setCourse] = useState<CourseWithLessons | null>(null);
     const [sessions, setSessions] = useState<StudySession[]>([]);
+    const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [activeTab, setActiveTab] = useState<'overview' | 'sessions' | 'analytics'>('overview');
+    const [activeTab, setActiveTab] = useState<'overview' | 'assignments' | 'sessions' | 'analytics'>('overview');
 
     // Load progress data
     const loadProgressData = async (isRefresh: boolean = false) => {
@@ -59,13 +61,15 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
             }
 
             // Load progress and course data in parallel
-            const [progressData, courseData] = await Promise.all([
+            const [progressData, courseData, assignmentsData] = await Promise.all([
                 afterSchoolService.getStudentProgress(courseId, token).catch(() => null),
-                afterSchoolService.getCourseDetails(courseId, token)
+                afterSchoolService.getCourseDetails(courseId, token),
+                afterSchoolService.getCourseAssignments(courseId, token).catch(() => [])
             ]);
 
             setProgress(progressData);
             setCourse(courseData);
+            setAssignments(assignmentsData);
             // For now, use empty sessions array - in real app would fetch from appropriate service
             setSessions([]);
         } catch (error) {
@@ -100,6 +104,25 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
             courseId,
             courseTitle
         });
+    };
+
+    // Navigate to assignment workflow
+    const navigateToAssignment = (assignment: StudentAssignment) => {
+        navigation.navigate('CourseAssignment', {
+            courseId,
+            assignmentId: assignment.assignment_id,
+            assignmentTitle: `Assignment ${assignment.assignment_id}`
+        });
+    };
+
+    // Continue workflow from progress screen
+    const continueWorkflow = () => {
+        const nextAssignment = assignments.find(a => a.status === 'assigned');
+        if (nextAssignment) {
+            navigateToAssignment(nextAssignment);
+        } else {
+            navigation.navigate('CourseDetails', { courseId, courseTitle });
+        }
     };
 
     // Format duration
@@ -247,6 +270,39 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
                     </View>
                 </View>
 
+                {/* Assignment Workflow Status */}
+                {assignments.length > 0 && (
+                    <View style={styles.workflowCard}>
+                        <Text style={styles.workflowTitle}>Assignment Workflow</Text>
+                        <View style={styles.workflowStats}>
+                            <View style={styles.workflowStatItem}>
+                                <Text style={styles.workflowStatValue}>
+                                    {assignments.filter(a => a.status === 'assigned').length}
+                                </Text>
+                                <Text style={styles.workflowStatLabel}>Pending</Text>
+                            </View>
+                            <View style={styles.workflowStatItem}>
+                                <Text style={styles.workflowStatValue}>
+                                    {assignments.filter(a => a.status === 'submitted').length}
+                                </Text>
+                                <Text style={styles.workflowStatLabel}>Submitted</Text>
+                            </View>
+                            <View style={styles.workflowStatItem}>
+                                <Text style={styles.workflowStatValue}>
+                                    {assignments.filter(a => a.status === 'graded').length}
+                                </Text>
+                                <Text style={styles.workflowStatLabel}>Graded</Text>
+                            </View>
+                        </View>
+
+                        {assignments.some(a => a.status === 'assigned') && (
+                            <TouchableOpacity style={styles.workflowButton} onPress={continueWorkflow}>
+                                <Text style={styles.workflowButtonText}>Continue Workflow</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                )}
+
                 {/* Progress Timeline */}
                 <View style={styles.timelineCard}>
                     <Text style={styles.timelineTitle}>Progress Timeline</Text>
@@ -356,6 +412,96 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
         );
     };
 
+    // Render assignments tab
+    const renderAssignmentsContent = () => {
+        if (assignments.length === 0) {
+            return (
+                <View style={styles.emptyContainer}>
+                    <Text style={styles.emptyTitle}>No Assignments</Text>
+                    <Text style={styles.emptySubtitle}>
+                        Assignments will appear here when they are available.
+                    </Text>
+                    <TouchableOpacity style={styles.continueButton} onPress={navigateBackToCourse}>
+                        <Text style={styles.continueButtonText}>Browse Course</Text>
+                    </TouchableOpacity>
+                </View>
+            );
+        }
+
+        return (
+            <View style={styles.contentContainer}>
+                <View style={styles.sectionHeader}>
+                    <Text style={styles.sectionTitle}>Course Assignments</Text>
+                    <Text style={styles.sectionSubtitle}>Track your assignment progress</Text>
+                </View>
+
+                {assignments.map((assignment) => (
+                    <TouchableOpacity
+                        key={assignment.id}
+                        style={styles.assignmentCard}
+                        onPress={() => navigateToAssignment(assignment)}
+                    >
+                        <View style={styles.assignmentHeader}>
+                            <Text style={styles.assignmentTitle}>Assignment #{assignment.assignment_id}</Text>
+                            <View style={[
+                                styles.statusBadge,
+                                styles[`status${assignment.status.charAt(0).toUpperCase() + assignment.status.slice(1).replace('_', '')}`]
+                            ]}>
+                                <Text style={styles.statusText}>
+                                    {assignment.status.replace('_', ' ').toUpperCase()}
+                                </Text>
+                            </View>
+                        </View>
+
+                        <View style={styles.assignmentDetails}>
+                            <Text style={styles.assignmentMeta}>
+                                Due: {new Date(assignment.due_date).toLocaleDateString()}
+                            </Text>
+                            {assignment.submitted_at && (
+                                <Text style={styles.assignmentMeta}>
+                                    Submitted: {new Date(assignment.submitted_at).toLocaleDateString()}
+                                </Text>
+                            )}
+                        </View>
+
+                        {assignment.grade !== undefined && (
+                            <View style={styles.gradeContainer}>
+                                <Text style={styles.gradeLabel}>Grade:</Text>
+                                <Text style={styles.gradeValue}>{assignment.grade}%</Text>
+                            </View>
+                        )}
+
+                        {assignment.feedback && (
+                            <View style={styles.feedbackContainer}>
+                                <Text style={styles.feedbackTitle}>Feedback:</Text>
+                                <Text style={styles.feedbackText} numberOfLines={2}>
+                                    {assignment.feedback}
+                                </Text>
+                            </View>
+                        )}
+
+                        <View style={styles.assignmentActions}>
+                            <TouchableOpacity
+                                style={[styles.actionButton, styles.primaryButton]}
+                                onPress={() => navigateToAssignment(assignment)}
+                            >
+                                <Text style={styles.primaryButtonText}>
+                                    {assignment.status === 'assigned' ? 'Start Assignment' : 'View Details'}
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+                    </TouchableOpacity>
+                ))}
+
+                {assignments.some(a => a.status === 'assigned') && (
+                    <TouchableOpacity style={styles.continueButton} onPress={continueWorkflow}>
+                        <Text style={styles.continueButtonText}>Continue Workflow</Text>
+                    </TouchableOpacity>
+                )}
+            </View>
+        );
+    };
+
     // Render analytics tab
     const renderAnalyticsContent = () => {
         if (!progress || sessions.length === 0) {
@@ -439,6 +585,14 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
                 </Text>
             </TouchableOpacity>
             <TouchableOpacity
+                style={[styles.tab, activeTab === 'assignments' && styles.activeTab]}
+                onPress={() => setActiveTab('assignments')}
+            >
+                <Text style={[styles.tabText, activeTab === 'assignments' && styles.activeTabText]}>
+                    Assignments ({assignments.length})
+                </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
                 style={[styles.tab, activeTab === 'sessions' && styles.activeTab]}
                 onPress={() => setActiveTab('sessions')}
             >
@@ -483,6 +637,7 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
                 }
             >
                 {activeTab === 'overview' && renderProgressOverview()}
+                {activeTab === 'assignments' && renderAssignmentsContent()}
                 {activeTab === 'sessions' && renderSessionsContent()}
                 {activeTab === 'analytics' && renderAnalyticsContent()}
             </ScrollView>
@@ -804,5 +959,183 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#666',
         textAlign: 'center',
+    },
+    // Assignment-specific styles
+    assignmentCard: {
+        backgroundColor: '#fff',
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 12,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 2,
+    },
+    assignmentHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    assignmentTitle: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#1a1a1a',
+        flex: 1,
+        marginRight: 12,
+    },
+    assignmentDetails: {
+        marginBottom: 12,
+    },
+    assignmentMeta: {
+        fontSize: 13,
+        color: '#666',
+        marginBottom: 4,
+    },
+    assignmentActions: {
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+        marginTop: 12,
+    },
+    actionButton: {
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        borderRadius: 8,
+        marginLeft: 8,
+    },
+    primaryButton: {
+        backgroundColor: '#007AFF',
+    },
+    primaryButtonText: {
+        color: '#fff',
+        fontWeight: '600',
+        fontSize: 14,
+    },
+    gradeContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    gradeLabel: {
+        fontSize: 13,
+        color: '#666',
+        marginRight: 8,
+    },
+    gradeValue: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#007AFF',
+    },
+    continueButton: {
+        backgroundColor: '#007AFF',
+        paddingVertical: 12,
+        paddingHorizontal: 24,
+        borderRadius: 8,
+        alignItems: 'center',
+        marginTop: 16,
+    },
+    continueButtonText: {
+        color: '#fff',
+        fontWeight: '600',
+        fontSize: 16,
+    },
+    // Status badge variations
+    statusAssigned: {
+        backgroundColor: '#FFF3CD',
+        borderColor: '#FFEAA7',
+    },
+    statusSubmitted: {
+        backgroundColor: '#CCE5FF',
+        borderColor: '#74B9FF',
+    },
+    statusGraded: {
+        backgroundColor: '#D4EDDA',
+        borderColor: '#00B894',
+    },
+    statusOverdue: {
+        backgroundColor: '#F8D7DA',
+        borderColor: '#E17055',
+    },
+    statusText: {
+        fontSize: 10,
+        fontWeight: '600',
+        color: '#333',
+    },
+    // Workflow-specific styles
+    workflowCard: {
+        backgroundColor: '#fff',
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 16,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 2,
+    },
+    workflowTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#1a1a1a',
+        marginBottom: 12,
+    },
+    workflowStats: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        marginBottom: 16,
+    },
+    workflowStatItem: {
+        alignItems: 'center',
+    },
+    workflowStatValue: {
+        fontSize: 20,
+        fontWeight: 'bold',
+        color: '#007AFF',
+    },
+    workflowStatLabel: {
+        fontSize: 12,
+        color: '#666',
+        marginTop: 4,
+    },
+    workflowButton: {
+        backgroundColor: '#007AFF',
+        paddingVertical: 10,
+        paddingHorizontal: 20,
+        borderRadius: 8,
+        alignItems: 'center',
+    },
+    workflowButtonText: {
+        color: '#fff',
+        fontWeight: '600',
+        fontSize: 14,
+    },
+    // Section styles
+    sectionHeader: {
+        marginBottom: 16,
+    },
+    sectionTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#1a1a1a',
+        marginBottom: 4,
+    },
+    sectionSubtitle: {
+        fontSize: 14,
+        color: '#666',
+    },
+    emptyTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#1a1a1a',
+        textAlign: 'center',
+        marginBottom: 8,
+    },
+    emptySubtitle: {
+        fontSize: 14,
+        color: '#666',
+        textAlign: 'center',
+        lineHeight: 20,
+        marginBottom: 16,
     },
 });

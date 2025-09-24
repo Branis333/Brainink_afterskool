@@ -9,9 +9,9 @@
       "ios",
       "android"
     ],
-    "icon": "./assets/brain-logo.png",
+    "icon": "./assets/brain-logo.jpg",
     "splash": {
-      "image": "./assets/brain-logo.png",
+      "image": "./assets/brain-logo.jpg",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -24,7 +24,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/brain-logo.png",
+        "foregroundImage": "./assets/brain-logo.jpg",
         "backgroundColor": "#ffffff"
       },
       "package": "com.brainink.skana",

@@ -24,7 +24,8 @@ import {
     afterSchoolService,
     Course,
     CourseFilters,
-    CourseListResponse
+    CourseListResponse,
+    StudentAssignment
 } from '../../services/afterSchoolService';
 
 type NavigationProp = NativeStackNavigationProp<any>;
@@ -39,6 +40,7 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
     const { token } = useAuth();
 
     const [courses, setCourses] = useState<Course[]>([]);
+    const [courseAssignments, setCourseAssignments] = useState<{ [key: number]: StudentAssignment[] }>({});
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [searchText, setSearchText] = useState('');
@@ -102,6 +104,26 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
             const filters = buildFilters();
             const response = await afterSchoolService.listCourses(token, filters);
             setCourses(response.courses);
+
+            // Load assignment data for enrolled courses
+            const assignmentPromises = response.courses
+                .filter(course => course.id) // Only for courses we might be enrolled in
+                .map(async (course) => {
+                    try {
+                        const assignments = await afterSchoolService.getCourseAssignments(course.id, token);
+                        return { courseId: course.id, assignments };
+                    } catch (error) {
+                        // Silently handle cases where user isn't enrolled or no assignments exist
+                        return { courseId: course.id, assignments: [] };
+                    }
+                });
+
+            const assignmentResults = await Promise.all(assignmentPromises);
+            const assignmentMap: { [key: number]: StudentAssignment[] } = {};
+            assignmentResults.forEach(({ courseId, assignments }) => {
+                assignmentMap[courseId] = assignments;
+            });
+            setCourseAssignments(assignmentMap);
         } catch (error) {
             console.error('Error loading courses:', error);
             Alert.alert(
@@ -134,6 +156,33 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
             courseId: course.id,
             courseTitle: course.title
         });
+    };
+
+    // Navigate directly to course assignment workflow
+    const navigateToCourseAssignment = (course: Course, assignment: StudentAssignment) => {
+        navigation.navigate('CourseAssignment', {
+            courseId: course.id,
+            assignmentId: assignment.assignment_id,
+            assignmentTitle: `Assignment ${assignment.assignment_id}`
+        });
+    };
+
+    // Navigate to course progress
+    const navigateToCourseProgress = (course: Course) => {
+        navigation.navigate('CourseProgress', {
+            courseId: course.id,
+            courseTitle: course.title
+        });
+    };
+
+    // Get assignment status for display
+    const getAssignmentStatus = (course: Course) => {
+        const assignments = courseAssignments[course.id] || [];
+        const assigned = assignments.filter(a => a.status === 'assigned').length;
+        const submitted = assignments.filter(a => a.status === 'submitted').length;
+        const graded = assignments.filter(a => a.status === 'graded').length;
+
+        return { total: assignments.length, assigned, submitted, graded };
     };
 
     // Clear all filters
@@ -326,6 +375,59 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
                     {course.description}
                 </Text>
             )}
+
+            {/* Assignment Workflow Status */}
+            {(() => {
+                const assignmentStatus = getAssignmentStatus(course);
+                if (assignmentStatus.total > 0) {
+                    return (
+                        <View style={styles.workflowSection}>
+                            <Text style={styles.workflowTitle}>Assignment Progress</Text>
+                            <View style={styles.workflowStats}>
+                                <View style={styles.workflowStatItem}>
+                                    <Text style={styles.workflowStatValue}>{assignmentStatus.assigned}</Text>
+                                    <Text style={styles.workflowStatLabel}>Pending</Text>
+                                </View>
+                                <View style={styles.workflowStatItem}>
+                                    <Text style={styles.workflowStatValue}>{assignmentStatus.submitted}</Text>
+                                    <Text style={styles.workflowStatLabel}>Submitted</Text>
+                                </View>
+                                <View style={styles.workflowStatItem}>
+                                    <Text style={styles.workflowStatValue}>{assignmentStatus.graded}</Text>
+                                    <Text style={styles.workflowStatLabel}>Graded</Text>
+                                </View>
+                            </View>
+                            <View style={styles.workflowActions}>
+                                {assignmentStatus.assigned > 0 && (
+                                    <TouchableOpacity
+                                        style={styles.workflowButton}
+                                        onPress={(e) => {
+                                            e.stopPropagation();
+                                            const nextAssignment = (courseAssignments[course.id] || [])
+                                                .find(a => a.status === 'assigned');
+                                            if (nextAssignment) {
+                                                navigateToCourseAssignment(course, nextAssignment);
+                                            }
+                                        }}
+                                    >
+                                        <Text style={styles.workflowButtonText}>Continue Workflow</Text>
+                                    </TouchableOpacity>
+                                )}
+                                <TouchableOpacity
+                                    style={styles.progressButton}
+                                    onPress={(e) => {
+                                        e.stopPropagation();
+                                        navigateToCourseProgress(course);
+                                    }}
+                                >
+                                    <Text style={styles.progressButtonText}>View Progress</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    );
+                }
+                return null;
+            })()}
 
             {/* Course Stats */}
             <View style={styles.courseStats}>
@@ -676,5 +778,69 @@ const styles = StyleSheet.create({
     courseStatText: {
         fontSize: 11,
         color: '#999',
+    },
+    // Workflow-specific styles
+    workflowSection: {
+        backgroundColor: '#f8f9fa',
+        borderRadius: 8,
+        padding: 12,
+        marginBottom: 8,
+    },
+    workflowTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#333',
+        marginBottom: 8,
+    },
+    workflowStats: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        marginBottom: 12,
+    },
+    workflowStatItem: {
+        alignItems: 'center',
+    },
+    workflowStatValue: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#007AFF',
+    },
+    workflowStatLabel: {
+        fontSize: 10,
+        color: '#666',
+        marginTop: 2,
+    },
+    workflowActions: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+    },
+    workflowButton: {
+        backgroundColor: '#007AFF',
+        paddingVertical: 6,
+        paddingHorizontal: 12,
+        borderRadius: 6,
+        flex: 1,
+        marginRight: 8,
+    },
+    workflowButtonText: {
+        color: '#fff',
+        fontSize: 12,
+        fontWeight: '600',
+        textAlign: 'center',
+    },
+    progressButton: {
+        backgroundColor: '#f8f9fa',
+        borderColor: '#007AFF',
+        borderWidth: 1,
+        paddingVertical: 6,
+        paddingHorizontal: 12,
+        borderRadius: 6,
+        flex: 1,
+    },
+    progressButtonText: {
+        color: '#007AFF',
+        fontSize: 12,
+        fontWeight: '600',
+        textAlign: 'center',
     },
 });

@@ -21,17 +21,18 @@ import { RouteProp, useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../../context/AuthContext';
 import {
     afterSchoolService,
-    CourseLesson,
-    CourseWithLessons,
-    StudySession
+    CourseBlock,
+    CourseWithBlocks,
+    StudySession,
+    StudentAssignment
 } from '../../services/afterSchoolService';
 
 type NavigationProp = NativeStackNavigationProp<any>;
 type RouteProp_ = RouteProp<{
     params: {
         courseId: number;
-        lessonId: number;
-        lessonTitle: string;
+        blockId: number;
+        blockTitle: string;
         courseTitle: string;
     }
 }>;
@@ -44,16 +45,17 @@ interface Props {
 const { width } = Dimensions.get('window');
 
 export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
-    const { courseId, lessonId, lessonTitle, courseTitle } = route.params;
+    const { courseId, blockId, blockTitle, courseTitle } = route.params;
     const { token } = useAuth();
 
-    const [lesson, setLesson] = useState<CourseLesson | null>(null);
-    const [course, setCourse] = useState<CourseWithLessons | null>(null);
+    const [block, setBlock] = useState<CourseBlock | null>(null);
+    const [course, setCourse] = useState<CourseWithBlocks | null>(null);
+    const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
 
-    // Load lesson data
-    const loadLessonData = async (isRefresh: boolean = false) => {
+    // Load block data
+    const loadBlockData = async (isRefresh: boolean = false) => {
         try {
             if (!isRefresh) setLoading(true);
 
@@ -61,14 +63,16 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
                 throw new Error('No authentication token available');
             }
 
-            // Load lesson details and course data in parallel
-            const [lessonData, courseData] = await Promise.all([
-                afterSchoolService.getLessonDetails(courseId, lessonId, token),
-                afterSchoolService.getCourseDetails(courseId, token)
+            // Load block details, course data, and assignments in parallel
+            const [blockData, courseData, assignmentsData] = await Promise.all([
+                afterSchoolService.getCourseBlockDetails(courseId, blockId, token),
+                afterSchoolService.getCourseWithBlocks(courseId, token),
+                afterSchoolService.getCourseAssignments(courseId, token, { block_id: blockId }).catch(() => [])
             ]);
 
-            setLesson(lessonData);
+            setBlock(blockData);
             setCourse(courseData);
+            setAssignments(assignmentsData);
         } catch (error) {
             console.error('Error loading lesson data:', error);
             Alert.alert(
@@ -85,31 +89,31 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
     // Load data on screen focus
     useFocusEffect(
         useCallback(() => {
-            loadLessonData();
-        }, [courseId, lessonId, token])
+            loadBlockData();
+        }, [courseId, blockId, token])
     );
 
     // Pull to refresh
     const onRefresh = useCallback(() => {
         setRefreshing(true);
-        loadLessonData(true);
+        loadBlockData(true);
     }, []);
 
-    // Start study session for this lesson
+    // Start study session for this block
     const startStudySession = async () => {
         try {
-            if (!token || !lesson) return;
+            if (!token || !block) return;
 
             const session = await afterSchoolService.startStudySession({
                 course_id: courseId,
-                lesson_id: lessonId
+                block_id: blockId
             }, token);
 
             navigation.navigate('StudySession', {
                 sessionId: session.id,
                 courseId,
-                lessonId,
-                lessonTitle: lesson.title,
+                blockId,
+                blockTitle: block.title,
                 courseTitle
             });
         } catch (error) {
@@ -122,35 +126,37 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
         }
     };
 
-    // Navigate to previous lesson
-    const navigateToPreviousLesson = () => {
-        if (!course?.lessons) return;
+    // Navigate to previous block
+    const navigateToPreviousBlock = () => {
+        if (!course?.blocks) return;
 
-        const currentIndex = course.lessons.findIndex(l => l.id === lessonId);
-        const prevLesson = course.lessons[currentIndex - 1];
+        const sortedBlocks = [...course.blocks].sort((a, b) => a.week - b.week || a.block_number - b.block_number);
+        const currentIndex = sortedBlocks.findIndex(b => b.id === blockId);
+        const prevBlock = sortedBlocks[currentIndex - 1];
 
-        if (prevLesson) {
+        if (prevBlock) {
             navigation.replace('LessonView', {
                 courseId,
-                lessonId: prevLesson.id,
-                lessonTitle: prevLesson.title,
+                blockId: prevBlock.id,
+                blockTitle: prevBlock.title,
                 courseTitle
             });
         }
     };
 
-    // Navigate to next lesson
-    const navigateToNextLesson = () => {
-        if (!course?.lessons) return;
+    // Navigate to next block
+    const navigateToNextBlock = () => {
+        if (!course?.blocks) return;
 
-        const currentIndex = course.lessons.findIndex(l => l.id === lessonId);
-        const nextLesson = course.lessons[currentIndex + 1];
+        const sortedBlocks = [...course.blocks].sort((a, b) => a.week - b.week || a.block_number - b.block_number);
+        const currentIndex = sortedBlocks.findIndex(b => b.id === blockId);
+        const nextBlock = sortedBlocks[currentIndex + 1];
 
-        if (nextLesson) {
+        if (nextBlock) {
             navigation.replace('LessonView', {
                 courseId,
-                lessonId: nextLesson.id,
-                lessonTitle: nextLesson.title,
+                blockId: nextBlock.id,
+                blockTitle: nextBlock.title,
                 courseTitle
             });
         }
@@ -164,6 +170,26 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
         });
     };
 
+    // Navigate to assignment workflow
+    const navigateToAssignment = (assignment: StudentAssignment) => {
+        navigation.navigate('CourseAssignment', {
+            courseId,
+            assignmentId: assignment.assignment_id,
+            assignmentTitle: `Assignment ${assignment.assignment_id}`
+        });
+    };
+
+    // Continue workflow to assignments
+    const continueToAssignments = () => {
+        const pendingAssignment = assignments.find(a => a.status === 'assigned');
+        if (pendingAssignment) {
+            navigateToAssignment(pendingAssignment);
+        } else {
+            // Navigate to course details to see all assignments
+            navigateBackToCourse();
+        }
+    };
+
     // Format duration
     const formatDuration = (minutes: number): string => {
         if (minutes < 60) {
@@ -174,20 +200,20 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
         return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
     };
 
-    // Get current lesson index and navigation info
-    const getCurrentLessonInfo = () => {
-        if (!course?.lessons || !lesson) {
+    // Get current block index and navigation info
+    const getCurrentBlockInfo = () => {
+        if (!course?.blocks || !block) {
             return { currentIndex: -1, total: 0, hasPrevious: false, hasNext: false };
         }
 
-        const sortedLessons = [...course.lessons].sort((a, b) => a.order_index - b.order_index);
-        const currentIndex = sortedLessons.findIndex(l => l.id === lessonId);
+        const sortedBlocks = [...course.blocks].sort((a, b) => a.week - b.week || a.block_number - b.block_number);
+        const currentIndex = sortedBlocks.findIndex(b => b.id === blockId);
 
         return {
             currentIndex: currentIndex + 1, // 1-based for display
-            total: sortedLessons.length,
+            total: sortedBlocks.length,
             hasPrevious: currentIndex > 0,
-            hasNext: currentIndex < sortedLessons.length - 1
+            hasNext: currentIndex < sortedBlocks.length - 1
         };
     };
 
@@ -203,18 +229,18 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
                         <Text style={styles.backButtonText}>← Back</Text>
                     </TouchableOpacity>
                     <Text style={styles.headerTitle} numberOfLines={1}>
-                        {lessonTitle}
+                        {blockTitle}
                     </Text>
                 </View>
                 <View style={styles.loadingContainer}>
                     <ActivityIndicator size="large" color="#007AFF" />
-                    <Text style={styles.loadingText}>Loading lesson...</Text>
+                    <Text style={styles.loadingText}>Loading block...</Text>
                 </View>
             </SafeAreaView>
         );
     }
 
-    if (!lesson) {
+    if (!block) {
         return (
             <SafeAreaView style={styles.container}>
                 <View style={styles.header}>
@@ -224,13 +250,13 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
                     >
                         <Text style={styles.backButtonText}>← Back</Text>
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Lesson Not Found</Text>
+                    <Text style={styles.headerTitle}>Block Not Found</Text>
                 </View>
                 <View style={styles.errorContainer}>
-                    <Text style={styles.errorText}>Lesson not found</Text>
+                    <Text style={styles.errorText}>Block not found</Text>
                     <TouchableOpacity
                         style={styles.retryButton}
-                        onPress={() => loadLessonData()}
+                        onPress={() => loadBlockData()}
                     >
                         <Text style={styles.retryButtonText}>Retry</Text>
                     </TouchableOpacity>
@@ -239,41 +265,67 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
         );
     }
 
-    const lessonInfo = getCurrentLessonInfo();
+    const blockInfo = getCurrentBlockInfo();
 
-    // Render lesson header
-    const renderLessonHeader = () => (
+    // Render block header
+    const renderBlockHeader = () => (
         <View style={styles.lessonHeaderContainer}>
             <View style={styles.breadcrumbContainer}>
                 <TouchableOpacity onPress={navigateBackToCourse}>
                     <Text style={styles.breadcrumbCourse}>{courseTitle}</Text>
                 </TouchableOpacity>
                 <Text style={styles.breadcrumbSeparator}> / </Text>
-                <Text style={styles.breadcrumbLesson}>Lesson {lesson.order_index}</Text>
+                <Text style={styles.breadcrumbLesson}>Week {block.week} - Block {block.block_number}</Text>
             </View>
 
-            <Text style={styles.lessonTitle}>{lesson.title}</Text>
+            <Text style={styles.lessonTitle}>{block.title}</Text>
 
             <View style={styles.lessonMetaContainer}>
                 <View style={styles.lessonMeta}>
                     <Text style={styles.lessonMetaLabel}>Duration:</Text>
                     <Text style={styles.lessonMetaValue}>
-                        {formatDuration(lesson.estimated_duration)}
+                        {formatDuration(block.duration_minutes)}
                     </Text>
                 </View>
                 <View style={styles.lessonMeta}>
                     <Text style={styles.lessonMetaLabel}>Position:</Text>
                     <Text style={styles.lessonMetaValue}>
-                        {lessonInfo.currentIndex} of {lessonInfo.total}
+                        {blockInfo.currentIndex} of {blockInfo.total}
                     </Text>
                 </View>
             </View>
 
             {/* Learning Objectives */}
-            {typeof lesson.learning_objectives === 'string' && lesson.learning_objectives.trim().length > 0 && (
+            {block.learning_objectives && block.learning_objectives.length > 0 && (
                 <View style={styles.objectivesContainer}>
                     <Text style={styles.objectivesTitle}>Learning Objectives</Text>
-                    <Text style={styles.objectivesText}>{lesson.learning_objectives}</Text>
+                    <Text style={styles.objectivesText}>{block.learning_objectives.join('\n• ')}</Text>
+                </View>
+            )}
+
+            {/* Assignment Workflow Integration */}
+            {assignments.length > 0 && (
+                <View style={styles.assignmentSection}>
+                    <Text style={styles.assignmentSectionTitle}>Assignments for this Block</Text>
+                    <View style={styles.assignmentStats}>
+                        <Text style={styles.assignmentCount}>
+                            {assignments.filter(a => a.status === 'assigned').length} pending
+                        </Text>
+                        <Text style={styles.assignmentCount}>
+                            {assignments.filter(a => a.status === 'submitted').length} submitted
+                        </Text>
+                        <Text style={styles.assignmentCount}>
+                            {assignments.filter(a => a.status === 'graded').length} graded
+                        </Text>
+                    </View>
+                    {assignments.some(a => a.status === 'assigned') && (
+                        <TouchableOpacity
+                            style={styles.continueWorkflowButton}
+                            onPress={continueToAssignments}
+                        >
+                            <Text style={styles.continueWorkflowButtonText}>Continue to Assignments</Text>
+                        </TouchableOpacity>
+                    )}
                 </View>
             )}
 
@@ -287,51 +339,51 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
         </View>
     );
 
-    // Render lesson content
-    const renderLessonContent = () => (
+    // Render block content
+    const renderBlockContent = () => (
         <View style={styles.contentContainer}>
-            <Text style={styles.contentTitle}>Lesson Content</Text>
-            {lesson.content ? (
+            <Text style={styles.contentTitle}>Block Content</Text>
+            {block.content ? (
                 <View style={styles.contentBody}>
-                    <Text style={styles.contentText}>{lesson.content}</Text>
+                    <Text style={styles.contentText}>{block.content}</Text>
                 </View>
             ) : (
                 <View style={styles.noContentContainer}>
                     <Text style={styles.noContentText}>No content available</Text>
                     <Text style={styles.noContentSubtext}>
-                        Content for this lesson will be added soon
+                        Content for this block will be added soon
                     </Text>
                 </View>
             )}
         </View>
     );
 
-    // Render lesson navigation
-    const renderLessonNavigation = () => (
+    // Render block navigation
+    const renderBlockNavigation = () => (
         <View style={styles.navigationContainer}>
             <TouchableOpacity
-                style={[styles.navButton, !lessonInfo.hasPrevious && styles.disabledNavButton]}
-                onPress={navigateToPreviousLesson}
-                disabled={!lessonInfo.hasPrevious}
+                style={[styles.navButton, !blockInfo.hasPrevious && styles.disabledNavButton]}
+                onPress={navigateToPreviousBlock}
+                disabled={!blockInfo.hasPrevious}
             >
-                <Text style={[styles.navButtonText, !lessonInfo.hasPrevious && styles.disabledNavButtonText]}>
-                    ← Previous Lesson
+                <Text style={[styles.navButtonText, !blockInfo.hasPrevious && styles.disabledNavButtonText]}>
+                    ← Previous Block
                 </Text>
             </TouchableOpacity>
 
             <View style={styles.progressIndicator}>
                 <Text style={styles.progressText}>
-                    {lessonInfo.currentIndex}/{lessonInfo.total}
+                    {blockInfo.currentIndex}/{blockInfo.total}
                 </Text>
             </View>
 
             <TouchableOpacity
-                style={[styles.navButton, !lessonInfo.hasNext && styles.disabledNavButton]}
-                onPress={navigateToNextLesson}
-                disabled={!lessonInfo.hasNext}
+                style={[styles.navButton, !blockInfo.hasNext && styles.disabledNavButton]}
+                onPress={navigateToNextBlock}
+                disabled={!blockInfo.hasNext}
             >
-                <Text style={[styles.navButtonText, !lessonInfo.hasNext && styles.disabledNavButtonText]}>
-                    Next Lesson →
+                <Text style={[styles.navButtonText, !blockInfo.hasNext && styles.disabledNavButtonText]}>
+                    Next Block →
                 </Text>
             </TouchableOpacity>
         </View>
@@ -348,7 +400,7 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
                     <Text style={styles.backButtonText}>← Back</Text>
                 </TouchableOpacity>
                 <Text style={styles.headerTitle} numberOfLines={1}>
-                    {lesson.title}
+                    {block.title}
                 </Text>
             </View>
 
@@ -359,12 +411,12 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
                     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
                 }
             >
-                {renderLessonHeader()}
-                {renderLessonContent()}
+                {renderBlockHeader()}
+                {renderBlockContent()}
             </ScrollView>
 
             {/* Fixed Navigation Footer */}
-            {renderLessonNavigation()}
+            {renderBlockNavigation()}
         </SafeAreaView>
     );
 };
@@ -581,6 +633,41 @@ const styles = StyleSheet.create({
     progressText: {
         fontSize: 14,
         color: '#666',
+        fontWeight: '600',
+    },
+    // Assignment workflow styles
+    assignmentSection: {
+        backgroundColor: '#f8f9fa',
+        borderRadius: 12,
+        padding: 16,
+        marginVertical: 12,
+    },
+    assignmentSectionTitle: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#1a1a1a',
+        marginBottom: 8,
+    },
+    assignmentStats: {
+        flexDirection: 'row',
+        justifyContent: 'space-around',
+        marginBottom: 12,
+    },
+    assignmentCount: {
+        fontSize: 12,
+        color: '#666',
+        textAlign: 'center',
+    },
+    continueWorkflowButton: {
+        backgroundColor: '#007AFF',
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+        alignItems: 'center',
+    },
+    continueWorkflowButtonText: {
+        color: '#fff',
+        fontSize: 14,
         fontWeight: '600',
     },
 });

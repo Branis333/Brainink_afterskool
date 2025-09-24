@@ -20,6 +20,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../navigation/AppNavigatorNew';
 import { uploadsService, AISubmission } from '../../services/uploadsService';
+import { gradesService, StudentAssignment } from '../../services/gradesService';
 import { useAuth } from '../../context/AuthContext';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'UploadsOverview'>;
@@ -57,6 +58,18 @@ export const UploadsOverviewScreen: React.FC<Props> = ({ navigation }) => {
     const [recentUploads, setRecentUploads] = useState<AISubmission[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
+    const [workflowStatus, setWorkflowStatus] = useState<{
+        hasActiveUploads: boolean;
+        nextAction: string;
+        canContinue: boolean;
+        processingCount: number;
+    }>({
+        hasActiveUploads: false,
+        nextAction: 'No active uploads',
+        canContinue: false,
+        processingCount: 0
+    });
 
     const screenWidth = Dimensions.get('window').width;
 
@@ -81,6 +94,33 @@ export const UploadsOverviewScreen: React.FC<Props> = ({ navigation }) => {
             const recentSubmissions = await uploadsService.getUserRecentSubmissions(token, 5);
             setRecentUploads(recentSubmissions);
 
+            // Load workflow context - check for assignments and processing status
+            if (user?.id) {
+                try {
+                    const assignmentsData = await gradesService.getStudentAssignments(user.id, token, { limit: 10 });
+                    setAssignments(assignmentsData);
+
+                    // Determine workflow status
+                    const processingUploads = recentSubmissions.filter(upload =>
+                        !upload.ai_processed || upload.ai_score === null
+                    );
+                    const availableAssignments = assignmentsData.filter(a => a.status === 'assigned');
+
+                    setWorkflowStatus({
+                        hasActiveUploads: processingUploads.length > 0,
+                        processingCount: processingUploads.length,
+                        nextAction: processingUploads.length > 0
+                            ? `${processingUploads.length} uploads processing`
+                            : availableAssignments.length > 0
+                                ? 'Ready for new assignments'
+                                : 'Continue learning to unlock assignments',
+                        canContinue: availableAssignments.length > 0 || processingUploads.length > 0
+                    });
+                } catch (workflowError) {
+                    console.warn('Error loading workflow context:', workflowError);
+                }
+            }
+
         } catch (error) {
             console.error('Error loading uploads overview:', error);
             Alert.alert('Error', 'Failed to load uploads overview. Please check your connection and try again.');
@@ -93,6 +133,26 @@ export const UploadsOverviewScreen: React.FC<Props> = ({ navigation }) => {
     const handleRefresh = () => {
         setRefreshing(true);
         loadUploadsOverview();
+    };
+
+    // Workflow Navigation Functions
+    const navigateToAssignmentUpload = () => {
+        const nextAssignment = assignments.find(a => a.status === 'assigned');
+        if (nextAssignment) {
+            navigation.navigate('BulkUpload', {
+                assignmentId: nextAssignment.assignment_id,
+                courseId: nextAssignment.course_id,
+                submissionType: 'homework'
+            });
+        }
+    };
+
+    const continueWorkflowCycle = () => {
+        navigation.navigate('CourseHomepage');
+    };
+
+    const navigateToProcessingStatus = () => {
+        navigation.navigate('UploadProgress');
     };
 
     const quickActions: QuickAction[] = [
@@ -226,6 +286,48 @@ export const UploadsOverviewScreen: React.FC<Props> = ({ navigation }) => {
                         <Text style={styles.statNumber}>{uploadStats.pendingProcessing}</Text>
                         <Text style={styles.statLabel}>Processing</Text>
                     </View>
+                </View>
+
+                {/* Workflow Status Card */}
+                <View style={styles.workflowCard}>
+                    <View style={styles.workflowHeader}>
+                        <Text style={styles.workflowIcon}>
+                            {workflowStatus.hasActiveUploads ? '⚡' : '✓'}
+                        </Text>
+                        <Text style={styles.workflowTitle}>Assignment Workflow</Text>
+                    </View>
+                    <Text style={styles.workflowStatus}>{workflowStatus.nextAction}</Text>
+
+                    {workflowStatus.canContinue && (
+                        <View style={styles.workflowActions}>
+                            {assignments.some(a => a.status === 'assigned') && (
+                                <TouchableOpacity
+                                    style={styles.workflowButton}
+                                    onPress={navigateToAssignmentUpload}
+                                >
+                                    <Text style={styles.workflowButtonText}>Upload for Assignment</Text>
+                                </TouchableOpacity>
+                            )}
+
+                            {workflowStatus.hasActiveUploads && (
+                                <TouchableOpacity
+                                    style={[styles.workflowButton, styles.workflowButtonSecondary]}
+                                    onPress={navigateToProcessingStatus}
+                                >
+                                    <Text style={[styles.workflowButtonText, styles.workflowButtonTextSecondary]}>
+                                        View Progress
+                                    </Text>
+                                </TouchableOpacity>
+                            )}
+
+                            <TouchableOpacity
+                                style={styles.continueButton}
+                                onPress={continueWorkflowCycle}
+                            >
+                                <Text style={styles.continueButtonText}>Continue Learning</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
                 </View>
 
                 {/* Quick Actions */}
@@ -588,5 +690,83 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: '600',
         color: '#FFFFFF',
+    },
+    // Workflow Status Card Styles
+    workflowCard: {
+        backgroundColor: '#FFFFFF',
+        borderRadius: 12,
+        padding: 16,
+        marginHorizontal: 16,
+        marginBottom: 16,
+        shadowColor: '#000000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
+        borderLeftWidth: 4,
+        borderLeftColor: '#3B82F6',
+    },
+    workflowHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    workflowIcon: {
+        fontSize: 24,
+        marginRight: 8,
+    },
+    workflowTitle: {
+        fontSize: 18,
+        fontWeight: '600',
+        color: '#1F2937',
+    },
+    workflowStatus: {
+        fontSize: 14,
+        color: '#6B7280',
+        marginBottom: 16,
+        lineHeight: 20,
+    },
+    workflowActions: {
+        flexDirection: 'row',
+        gap: 8,
+        flexWrap: 'wrap',
+    },
+    workflowButton: {
+        backgroundColor: '#3B82F6',
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+        flex: 1,
+        minWidth: 120,
+    },
+    workflowButtonSecondary: {
+        backgroundColor: '#EBF5FF',
+        borderWidth: 1,
+        borderColor: '#3B82F6',
+    },
+    workflowButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#FFFFFF',
+        textAlign: 'center',
+    },
+    workflowButtonTextSecondary: {
+        color: '#3B82F6',
+    },
+    continueButton: {
+        backgroundColor: '#F9FAFB',
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        flex: 1,
+        minWidth: 100,
+    },
+    continueButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#6B7280',
+        textAlign: 'center',
     },
 });

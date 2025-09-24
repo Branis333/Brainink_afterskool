@@ -14,10 +14,11 @@ const getBackendUrl = () => {
 // TYPESCRIPT INTERFACES
 // ===============================
 
-// Study Session Interfaces (from existing afterSchoolService but more detailed)
+// Study Session Interfaces (Enhanced for the new workflow)
 export interface StudySessionStart {
     course_id: number;
-    lesson_id: number;
+    lesson_id?: number;  // Optional for backward compatibility
+    block_id?: number;   // New: for AI-generated course blocks
 }
 
 export interface StudySessionEnd {
@@ -29,7 +30,8 @@ export interface StudySession {
     id: number;
     user_id: number;
     course_id: number;
-    lesson_id: number;
+    lesson_id?: number;  // Made optional for block-based sessions
+    block_id?: number;   // New: for AI-generated course blocks
     started_at: string;
     ended_at?: string;
     duration_minutes?: number;
@@ -161,6 +163,40 @@ export interface SessionFilters {
 // Progress Filtering Options
 export interface ProgressFilters {
     course_id?: number;
+}
+
+// Student Assignment Interfaces (New for workflow)
+export interface StudentAssignment {
+    id: number;
+    user_id: number;
+    assignment_id: number;
+    course_id: number;
+    assigned_at: string;
+    due_date: string;
+    submitted_at?: string;
+    status: 'assigned' | 'submitted' | 'graded' | 'overdue';
+    submission_file_path?: string;
+    submission_content?: string;
+    grade?: number;
+    ai_grade?: number;
+    manual_grade?: number;
+    feedback?: string;
+    created_at: string;
+    updated_at: string;
+}
+
+// Auto-Grading Response (Enhanced for the workflow)
+export interface AutoGradingResponse {
+    submission: StudentAssignment;
+    grading_results: {
+        submission_id: number;
+        ai_score: number;
+        ai_feedback: string;
+        ai_corrections?: string;
+        ai_strengths?: string;
+        ai_improvements?: string;
+        processed_at: string;
+    };
 }
 
 class GradesService {
@@ -542,6 +578,198 @@ class GradesService {
     }
 
     // ===============================
+    // STUDENT ASSIGNMENT MANAGEMENT (New for Workflow)
+    // ===============================
+
+    /**
+     * Get student assignments for a specific user
+     */
+    async getStudentAssignments(
+        userId: number,
+        token: string,
+        filters: {
+            course_id?: number;
+            status?: 'assigned' | 'submitted' | 'graded' | 'overdue';
+            limit?: number;
+        } = {}
+    ): Promise<StudentAssignment[]> {
+        try {
+            console.log('📋 Fetching student assignments for user:', userId);
+
+            const params = new URLSearchParams();
+            Object.entries(filters).forEach(([key, value]) => {
+                if (value !== undefined && value !== null) {
+                    params.append(key, value.toString());
+                }
+            });
+
+            const queryString = params.toString();
+            const endpoint = `/after-school/sessions/assignments/student/${userId}${queryString ? `?${queryString}` : ''}`;
+
+            const response = await this.makeAuthenticatedRequest(endpoint, token);
+            const data = await response.json();
+
+            console.log('✅ Student assignments fetched successfully:', data.length);
+            return data;
+        } catch (error) {
+            console.error('❌ Error fetching student assignments:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get course assignments overview for teachers/admins
+     */
+    async getCourseAssignmentsOverview(
+        courseId: number,
+        token: string,
+        filters: {
+            assignment_id?: number;
+            student_ids?: number[];
+            include_stats?: boolean;
+        } = {}
+    ): Promise<StudentAssignment[]> {
+        try {
+            console.log('📊 Fetching course assignments overview for course:', courseId);
+
+            const params = new URLSearchParams();
+            if (filters.assignment_id) params.append('assignment_id', filters.assignment_id.toString());
+            if (filters.include_stats !== undefined) params.append('include_stats', filters.include_stats.toString());
+            if (filters.student_ids) {
+                filters.student_ids.forEach(id => params.append('student_ids', id.toString()));
+            }
+
+            const queryString = params.toString();
+            const endpoint = `/after-school/sessions/assignments/course/${courseId}${queryString ? `?${queryString}` : ''}`;
+
+            const response = await this.makeAuthenticatedRequest(endpoint, token);
+            const data = await response.json();
+
+            console.log('✅ Course assignments overview fetched successfully');
+            return data;
+        } catch (error) {
+            console.error('❌ Error fetching course assignments overview:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Auto-grade assignment submission (Core workflow method)
+     * This is the key method for the workflow: upload → auto-grade → results
+     */
+    async autoGradeAssignmentSubmission(
+        assignmentId: number,
+        token: string,
+        submissionData: {
+            submission_content?: string;
+            submission_file_path?: string;
+        } = {}
+    ): Promise<AutoGradingResponse> {
+        try {
+            console.log('🤖 Auto-grading assignment submission for assignment:', assignmentId);
+
+            const response = await this.makeAuthenticatedRequest(
+                `/after-school/sessions/assignments/${assignmentId}/auto-grade`,
+                token,
+                'POST',
+                submissionData
+            );
+
+            const data = await response.json();
+            console.log('✅ Assignment auto-graded successfully:', data.grading_results.ai_score);
+            return data;
+        } catch (error) {
+            console.error('❌ Error auto-grading assignment:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Process submission with Gemini AI (Advanced AI processing)
+     */
+    async processSubmissionWithAI(submissionId: number, token: string): Promise<any> {
+        try {
+            console.log('🧠 Processing submission with Gemini AI:', submissionId);
+
+            const response = await this.makeAuthenticatedRequest(
+                `/after-school/sessions/submissions/${submissionId}/process-with-ai`,
+                token,
+                'POST'
+            );
+
+            const data = await response.json();
+            console.log('✅ Submission processed with AI successfully');
+            return data;
+        } catch (error) {
+            console.error('❌ Error processing submission with AI:', error);
+            throw error;
+        }
+    }
+
+    // ===============================
+    // INTEGRATED WORKFLOW METHODS (Core workflow support)
+    // ===============================
+
+    /**
+     * Complete workflow method: Start session → Submit → Auto-grade → Results
+     * This supports the cycle: "read course → assignment → upload → auto-grade → results"
+     */
+    async executeAssignmentWorkflow(
+        courseId: number,
+        assignmentId: number,
+        submissionData: {
+            session_data?: StudySessionStart;
+            submission_content?: string;
+            submission_file_path?: string;
+        },
+        token: string
+    ): Promise<{
+        session?: StudySession;
+        grading_results: AutoGradingResponse;
+    }> {
+        try {
+            console.log('🚀 Executing complete assignment workflow');
+
+            let session = undefined;
+
+            // Step 1: Start session if needed
+            if (submissionData.session_data) {
+                console.log('📚 Step 1: Starting study session...');
+                session = await this.startStudySession(submissionData.session_data, token);
+            }
+
+            // Step 2: Auto-grade the assignment
+            console.log('🤖 Step 2: Auto-grading assignment...');
+            const gradingResults = await this.autoGradeAssignmentSubmission(
+                assignmentId,
+                token,
+                {
+                    submission_content: submissionData.submission_content,
+                    submission_file_path: submissionData.submission_file_path
+                }
+            );
+
+            // Step 3: End session if started
+            if (session) {
+                console.log('✅ Step 3: Ending study session...');
+                await this.endStudySession(session.id, {
+                    completion_percentage: 100,
+                    status: 'completed'
+                }, token);
+            }
+
+            console.log('✅ Assignment workflow completed successfully');
+            return {
+                session,
+                grading_results: gradingResults
+            };
+        } catch (error) {
+            console.error('❌ Error executing assignment workflow:', error);
+            throw error;
+        }
+    }
+
+    // ===============================
     // UTILITY AND HELPER METHODS
     // ===============================
 
@@ -723,6 +951,152 @@ class GradesService {
      */
     getSupportedFileTypes(): string[] {
         return ['pdf', 'doc', 'docx', 'txt', 'jpg', 'jpeg', 'png'];
+    }
+
+    // ===============================
+    // WORKFLOW-SPECIFIC HELPER METHODS
+    // ===============================
+
+    /**
+     * Validate assignment workflow data
+     */
+    validateAssignmentWorkflow(workflowData: {
+        courseId: number;
+        assignmentId: number;
+        submissionData?: any;
+    }): { valid: boolean; error?: string } {
+        if (!workflowData.courseId || workflowData.courseId <= 0) {
+            return { valid: false, error: 'Valid course ID is required' };
+        }
+
+        if (!workflowData.assignmentId || workflowData.assignmentId <= 0) {
+            return { valid: false, error: 'Valid assignment ID is required' };
+        }
+
+        return { valid: true };
+    }
+
+    /**
+     * Get assignment status color for UI
+     */
+    getAssignmentStatusColor(status: string): string {
+        switch (status) {
+            case 'assigned': return '#2196F3'; // Blue
+            case 'submitted': return '#FF9800'; // Orange  
+            case 'graded': return '#4CAF50'; // Green
+            case 'overdue': return '#F44336'; // Red
+            default: return '#757575'; // Gray
+        }
+    }
+
+    /**
+     * Format assignment due date for display
+     */
+    formatAssignmentDueDate(dueDate: string): {
+        formatted: string;
+        isOverdue: boolean;
+        daysUntilDue: number;
+    } {
+        const due = new Date(dueDate);
+        const now = new Date();
+        const timeDiff = due.getTime() - now.getTime();
+        const daysDiff = Math.ceil(timeDiff / (1000 * 3600 * 24));
+
+        return {
+            formatted: due.toLocaleDateString(),
+            isOverdue: daysDiff < 0,
+            daysUntilDue: daysDiff
+        };
+    }
+
+    /**
+     * Check if user can continue the workflow cycle
+     */
+    canContinueWorkflowCycle(
+        lastSession?: StudySession,
+        lastAssignment?: StudentAssignment
+    ): {
+        canContinue: boolean;
+        reason?: string;
+        nextAction?: string;
+    } {
+        // If no previous activity, can start fresh
+        if (!lastSession && !lastAssignment) {
+            return {
+                canContinue: true,
+                nextAction: 'Select a course to read and start learning'
+            };
+        }
+
+        // If last assignment is graded, can continue to next
+        if (lastAssignment && lastAssignment.status === 'graded') {
+            return {
+                canContinue: true,
+                nextAction: 'Continue to next assignment or course block'
+            };
+        }
+
+        // If session in progress, should complete it first
+        if (lastSession && lastSession.status === 'in_progress') {
+            return {
+                canContinue: false,
+                reason: 'Complete current study session first',
+                nextAction: 'Finish current session before starting new workflow'
+            };
+        }
+
+        // If assignment submitted but not graded, wait for grading
+        if (lastAssignment && lastAssignment.status === 'submitted') {
+            return {
+                canContinue: false,
+                reason: 'Assignment is being graded',
+                nextAction: 'Wait for grading results or check back later'
+            };
+        }
+
+        return {
+            canContinue: true,
+            nextAction: 'Ready to start new workflow cycle'
+        };
+    }
+
+    /**
+     * Get workflow progress summary
+     */
+    getWorkflowProgressSummary(
+        sessions: StudySession[],
+        assignments: StudentAssignment[]
+    ): {
+        totalSessions: number;
+        completedSessions: number;
+        totalAssignments: number;
+        gradedAssignments: number;
+        averageScore: number;
+        workflowCompletionRate: number;
+    } {
+        const completedSessions = sessions.filter(s => s.status === 'completed').length;
+        const gradedAssignments = assignments.filter(a => a.status === 'graded').length;
+
+        const scores = assignments
+            .filter(a => a.grade !== null && a.grade !== undefined)
+            .map(a => a.grade!);
+
+        const averageScore = scores.length > 0
+            ? scores.reduce((sum, score) => sum + score, 0) / scores.length
+            : 0;
+
+        const workflowCompletionRate = assignments.length > 0
+            ? (gradedAssignments / assignments.length) * 100
+            : 0;
+
+        return {
+            totalSessions: sessions.length,
+            completedSessions,
+            totalAssignments: assignments.length,
+            gradedAssignments,
+            averageScore,
+            workflowCompletionRate
+        };
     }
 }
 

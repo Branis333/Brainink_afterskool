@@ -24,7 +24,10 @@ import {
     CourseWithLessons,
     CourseLesson,
     StudentProgress,
-    StudySession
+    CourseBlock,
+    StudentAssignment,
+    UnifiedCourse,
+    CourseAssignment
 } from '../../services/afterSchoolService';
 
 type NavigationProp = NativeStackNavigationProp<any>;
@@ -41,13 +44,23 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
     const { courseId, courseTitle } = route.params;
     const { token } = useAuth();
 
-    const [course, setCourse] = useState<CourseWithLessons | null>(null);
+    const [course, setCourse] = useState<UnifiedCourse | null>(null);
+    const [blocks, setBlocks] = useState<CourseBlock[]>([]);
     const [progress, setProgress] = useState<StudentProgress | null>(null);
+    const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
+    const [rawAssignments, setRawAssignments] = useState<CourseAssignment[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [loadingAssignments, setLoadingAssignments] = useState(false);
+    const [enrolling, setEnrolling] = useState(false);
+    const [isEnrolled, setIsEnrolled] = useState(false); // explicit enrollment UI flag
     const [activeTab, setActiveTab] = useState<'lessons' | 'progress' | 'assignments'>('lessons');
+    const [activeLessonSessions, setActiveLessonSessions] = useState<Record<number, number>>({}); // lessonId -> sessionId
+    const [activeBlockSessions, setActiveBlockSessions] = useState<Record<number, number>>({}); // blockId -> sessionId
 
     // Load course data
+    const inFlightRef = React.useRef<Promise<void> | null>(null);
+
     const loadCourseData = async (isRefresh: boolean = false) => {
         try {
             if (!isRefresh) setLoading(true);
@@ -55,18 +68,31 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
             if (!token) {
                 throw new Error('No authentication token available');
             }
+            if (inFlightRef.current) {
+                return; // prevent duplicate load
+            }
+            inFlightRef.current = (async () => {
+                // Load unified course & progress in parallel
+                const [courseData, progressData] = await Promise.all([
+                    afterSchoolService.getUnifiedCourse(courseId, token, {
+                        include_stats: true,
+                        include_progress: true
+                    }),
+                    afterSchoolService.getStudentProgress(courseId, token).catch(() => null)
+                ]);
 
-            // Load course details and progress in parallel
-            const [courseData, progressData] = await Promise.all([
-                afterSchoolService.getCourseDetails(courseId, token, {
-                    include_stats: true,
-                    include_progress: true
-                }),
-                afterSchoolService.getStudentProgress(courseId, token).catch(() => null)
-            ]);
-
-            setCourse(courseData);
-            setProgress(progressData);
+                setCourse(courseData);
+                setBlocks(Array.isArray(courseData.blocks) ? courseData.blocks : []);
+                setProgress(progressData);
+                // Recalculate enrollment flag based on any progress or assignments already fetched later
+                setIsEnrolled(!!progressData);
+                try {
+                    await detectActiveSessions(courseData, progressData);
+                } catch (e) {
+                    console.warn('Active session detection skipped', e);
+                }
+            })();
+            await inFlightRef.current;
         } catch (error) {
             console.error('Error loading course data:', error);
             Alert.alert(
@@ -77,6 +103,58 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         } finally {
             setLoading(false);
             if (isRefresh) setRefreshing(false);
+            inFlightRef.current = null;
+        }
+    };
+
+    // Load assignments for the course
+    const loadAssignments = async () => {
+        if (!token) return;
+
+        try {
+            setLoadingAssignments(true);
+            const [studentSpecific, definitions] = await Promise.all([
+                afterSchoolService.getCourseAssignments(courseId, token).catch(() => []),
+                afterSchoolService.getCourseAssignmentDefinitions(courseId, token).catch(() => [])
+            ]);
+            setAssignments(studentSpecific);
+            setRawAssignments(definitions);
+            if (studentSpecific.length > 0) setIsEnrolled(true);
+        } catch (error) {
+            console.error('Error loading assignments:', error);
+        } finally {
+            setLoadingAssignments(false);
+        }
+    };
+
+    // Enroll in course
+    const handleEnroll = async () => {
+        if (!token) return;
+        if (enrolling) return;
+        // If we already have progress or assignments, assume enrolled
+        if (isEnrolled || progress || assignments.length > 0) return;
+        try {
+            setEnrolling(true);
+            const res = await afterSchoolService.enrollInCourse(courseId, token);
+            Alert.alert('Enrollment', res?.message || 'You have been enrolled in this course.');
+            // Immediately reflect enrollment before heavy reloads
+            setIsEnrolled(true);
+            await Promise.all([
+                loadCourseData(true),
+                loadAssignments(),
+            ]);
+            setActiveTab('assignments');
+        } catch (e: any) {
+            const msg = (e && e.message) || 'Failed to enroll in this course. Please try again.';
+            if (msg.toLowerCase().includes('already enrolled')) {
+                // Force a refresh anyway
+                setIsEnrolled(true);
+                await Promise.all([loadCourseData(true), loadAssignments()]);
+            } else {
+                Alert.alert('Error', msg);
+            }
+        } finally {
+            setEnrolling(false);
         }
     };
 
@@ -86,6 +164,55 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
             loadCourseData();
         }, [courseId, token])
     );
+
+    // Load assignments when assignments tab is activated
+    const onTabChange = (tab: 'lessons' | 'progress' | 'assignments') => {
+        setActiveTab(tab);
+        if (tab === 'assignments' && assignments.length === 0) {
+            loadAssignments();
+        }
+    };
+
+    // Detect active sessions for lessons & blocks
+    const detectActiveSessions = async (courseData?: UnifiedCourse | null, progressData?: StudentProgress | null) => {
+        if (!token) return;
+        const targetCourse = courseData || course;
+        if (!targetCourse) return;
+        try {
+            const lessonMap: Record<number, number> = {};
+            const blockMap: Record<number, number> = {};
+            const lessons = (targetCourse.lessons || []).slice(0, 50);
+            const blocksData = (targetCourse.blocks || []).slice(0, 50);
+            const fetchOne = async (params: { lesson_id?: number; block_id?: number }) => {
+                const qp: string[] = [`course_id=${targetCourse.id}`, 'status=in_progress', 'limit=1'];
+                if (params.lesson_id) qp.push(`lesson_id=${params.lesson_id}`);
+                if (params.block_id) qp.push(`block_id=${params.block_id}`);
+                try {
+                    // Reuse service low-level fetcher if exposed; otherwise direct fetch
+                    const resp = await fetch(`${afterSchoolService ? ((afterSchoolService as any).baseUrl || 'https://brainink-backend.onrender.com') : 'https://brainink-backend.onrender.com'}/after-school/sessions/?${qp.join('&')}`, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    if (!resp.ok) return;
+                    const data = await resp.json();
+                    if (Array.isArray(data) && data.length > 0) {
+                        const s = data[0];
+                        if (params.lesson_id) lessonMap[params.lesson_id] = s.id;
+                        if (params.block_id) blockMap[params.block_id] = s.id;
+                    }
+                } catch (e) {
+                    // Silent per-item failure
+                }
+            };
+            await Promise.allSettled([
+                ...lessons.map(l => fetchOne({ lesson_id: l.id })),
+                ...blocksData.map(b => fetchOne({ block_id: b.id }))
+            ]);
+            setActiveLessonSessions(lessonMap);
+            setActiveBlockSessions(blockMap);
+        } catch (e) {
+            console.warn('detectActiveSessions error', e);
+        }
+    };
 
     // Pull to refresh
     const onRefresh = useCallback(() => {
@@ -107,11 +234,18 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
     const startStudySession = async (lesson: CourseLesson) => {
         try {
             if (!token) return;
-
-            const session = await afterSchoolService.startStudySession({
-                course_id: courseId,
-                lesson_id: lesson.id
-            }, token);
+            if (activeLessonSessions[lesson.id]) {
+                navigation.navigate('StudySession', {
+                    sessionId: activeLessonSessions[lesson.id],
+                    courseId,
+                    lessonId: lesson.id,
+                    lessonTitle: lesson.title,
+                    courseTitle
+                });
+                return;
+            }
+            const session = await afterSchoolService.startStudySession({ course_id: courseId, lesson_id: lesson.id }, token);
+            setActiveLessonSessions(prev => ({ ...prev, [lesson.id]: session.id }));
 
             navigation.navigate('StudySession', {
                 sessionId: session.id,
@@ -143,6 +277,27 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         navigation.navigate('CourseProgress', {
             courseId,
             courseTitle
+        });
+    };
+
+    // Navigate to assignment workflow
+    const navigateToAssignment = (assignment: StudentAssignment) => {
+        navigation.navigate('CourseAssignment', {
+            courseId,
+            assignmentId: assignment.assignment_id,
+            assignmentTitle: assignment.assignment.title,
+            courseTitle
+        });
+    };
+
+    // Start assignment workflow directly
+    const startAssignmentWorkflow = (assignment: StudentAssignment) => {
+        navigation.navigate('CourseAssignment', {
+            courseId,
+            assignmentId: assignment.assignment_id,
+            assignmentTitle: assignment.assignment.title,
+            courseTitle,
+            startWorkflow: true
         });
     };
 
@@ -273,23 +428,43 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                     <Text style={styles.descriptionText}>{course.description}</Text>
                 </View>
             )}
+
+            {/* Enroll CTA */}
+            <View style={{ marginTop: 16 }}>
+                {isEnrolled || progress || assignments.length > 0 ? (
+                    <View style={[styles.enrollButton, { backgroundColor: '#28A745' }]}>
+                        <Text style={styles.enrollButtonText}>Enrolled</Text>
+                    </View>
+                ) : (
+                    <TouchableOpacity
+                        onPress={handleEnroll}
+                        disabled={enrolling}
+                        style={[styles.enrollButton, enrolling && { opacity: 0.7 }]}
+                    >
+                        <Text style={styles.enrollButtonText}>{enrolling ? 'Enrolling…' : 'Enroll in Course'}</Text>
+                    </TouchableOpacity>
+                )}
+            </View>
         </View>
     );
 
     // Render tab navigation
+    const hasLessons = !!course.lessons?.length;
+    const hasBlocks = blocks.length > 0;
+
     const renderTabNavigation = () => (
         <View style={styles.tabContainer}>
             <TouchableOpacity
                 style={[styles.tab, activeTab === 'lessons' && styles.activeTab]}
-                onPress={() => setActiveTab('lessons')}
+                onPress={() => onTabChange('lessons')}
             >
                 <Text style={[styles.tabText, activeTab === 'lessons' && styles.activeTabText]}>
-                    Lessons ({course.lessons?.length || 0})
+                    {hasLessons ? 'Lessons' : hasBlocks ? 'Blocks' : 'Lessons'} ({hasLessons ? course.lessons?.length || 0 : hasBlocks ? blocks.length : 0})
                 </Text>
             </TouchableOpacity>
             <TouchableOpacity
                 style={[styles.tab, activeTab === 'progress' && styles.activeTab]}
-                onPress={() => setActiveTab('progress')}
+                onPress={() => onTabChange('progress')}
             >
                 <Text style={[styles.tabText, activeTab === 'progress' && styles.activeTabText]}>
                     Progress
@@ -297,10 +472,10 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
             </TouchableOpacity>
             <TouchableOpacity
                 style={[styles.tab, activeTab === 'assignments' && styles.activeTab]}
-                onPress={() => setActiveTab('assignments')}
+                onPress={() => onTabChange('assignments')}
             >
                 <Text style={[styles.tabText, activeTab === 'assignments' && styles.activeTabText]}>
-                    Assignments
+                    Assignments ({assignments.length})
                 </Text>
             </TouchableOpacity>
         </View>
@@ -364,20 +539,89 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
 
     // Render lessons tab content
     const renderLessonsContent = () => {
-        if (!course.lessons?.length) {
+        // If lessons exist, show them
+        if (hasLessons) {
             return (
-                <View style={styles.emptyContainer}>
-                    <Text style={styles.emptyText}>No lessons available</Text>
-                    <Text style={styles.emptySubtext}>Lessons will appear here when they're added to the course</Text>
+                <View style={styles.contentContainer}>
+                    {course.lessons
+                        .sort((a, b) => a.order_index - b.order_index)
+                        .map((lesson, index) => renderLessonCard(lesson, index))}
+                </View>
+            );
+        }
+
+        // Fallback: show blocks if no lessons
+        if (hasBlocks) {
+            return (
+                <View style={styles.contentContainer}>
+                    {blocks
+                        .sort((a, b) => (a.week - b.week) || (a.block_number - b.block_number))
+                        .map((block, idx) => renderBlockCard(block, idx))}
                 </View>
             );
         }
 
         return (
-            <View style={styles.contentContainer}>
-                {course.lessons
-                    .sort((a, b) => a.order_index - b.order_index)
-                    .map((lesson, index) => renderLessonCard(lesson, index))}
+            <View style={styles.emptyContainer}>
+                <Text style={styles.emptyText}>No content available</Text>
+                <Text style={styles.emptySubtext}>Lessons or blocks will appear here when added</Text>
+            </View>
+        );
+    };
+
+    const startBlockSession = async (block: CourseBlock) => {
+        try {
+            if (!token) return;
+            if (activeBlockSessions[block.id]) {
+                navigation.navigate('StudySession', {
+                    sessionId: activeBlockSessions[block.id],
+                    courseId,
+                    blockId: block.id,
+                    blockTitle: block.title,
+                    courseTitle
+                });
+                return;
+            }
+            const session = await afterSchoolService.startStudySession({ course_id: courseId, block_id: block.id }, token);
+            setActiveBlockSessions(prev => ({ ...prev, [block.id]: session.id }));
+            navigation.navigate('StudySession', {
+                sessionId: session.id,
+                courseId,
+                blockId: block.id,
+                blockTitle: block.title,
+                courseTitle
+            });
+        } catch (error) {
+            console.error('Error starting block study session:', error);
+            Alert.alert('Error', 'Failed to start block study session.');
+        }
+    };
+
+    const renderBlockCard = (block: CourseBlock, index: number) => {
+        return (
+            <View key={block.id} style={styles.lessonCard}>
+                <View style={styles.lessonHeader}>
+                    <View style={styles.lessonInfo}>
+                        <Text style={styles.lessonOrder}>Week {block.week} • Block {block.block_number}</Text>
+                        <Text style={styles.lessonTitle}>{block.title}</Text>
+                        <Text style={styles.lessonDuration}>{formatDuration(block.duration_minutes)}</Text>
+                        {Array.isArray(block.learning_objectives) && block.learning_objectives.length > 0 && (
+                            <Text style={styles.lessonObjectives} numberOfLines={2}>
+                                {block.learning_objectives.join('; ')}
+                            </Text>
+                        )}
+                    </View>
+                </View>
+                <View style={styles.lessonButtonContainer}>
+                    <TouchableOpacity
+                        style={styles.startStudyButton}
+                        onPress={() => startBlockSession(block)}
+                    >
+                        <Text style={styles.startStudyButtonText}>
+                            {activeBlockSessions[block.id] ? 'Continue Study' : 'Start Study'}
+                        </Text>
+                    </TouchableOpacity>
+                </View>
             </View>
         );
     };
@@ -424,23 +668,162 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         );
     };
 
-    // Render assignments tab content
-    const renderAssignmentsContent = () => (
-        <View style={styles.contentContainer}>
-            <View style={styles.assignmentCard}>
-                <Text style={styles.assignmentTitle}>Course Assignments</Text>
-                <Text style={styles.assignmentDescription}>
-                    View and submit your homework, quizzes, and assessments for this course.
-                </Text>
-                <TouchableOpacity
-                    style={styles.viewAssignmentsButton}
-                    onPress={navigateToAssignments}
-                >
-                    <Text style={styles.viewAssignmentsButtonText}>View All Assignments</Text>
-                </TouchableOpacity>
+    // Get assignment status display
+    const getAssignmentStatusDisplay = (assignment: StudentAssignment) => {
+        switch (assignment.status) {
+            case 'assigned':
+                return { text: 'New Assignment', color: '#007AFF', bgColor: '#E3F2FD' };
+            case 'submitted':
+                return { text: 'Submitted', color: '#FF9500', bgColor: '#FFF3E0' };
+            case 'graded':
+                return { text: 'Completed', color: '#28A745', bgColor: '#E8F5E8' };
+            default:
+                return { text: 'Unknown', color: '#666', bgColor: '#F5F5F5' };
+        }
+    };
+
+    // Render assignment card
+    const renderAssignmentCard = (assignment: StudentAssignment) => {
+        const statusDisplay = getAssignmentStatusDisplay(assignment);
+        const isCompleted = assignment.status === 'graded';
+        const canStartWorkflow = assignment.status === 'assigned';
+
+        return (
+            <View key={assignment.id} style={styles.assignmentWorkflowCard}>
+                <View style={styles.assignmentHeader}>
+                    <View style={styles.assignmentInfo}>
+                        <Text style={styles.assignmentWorkflowTitle}>{assignment.assignment.title}</Text>
+                        <Text style={styles.assignmentDescription}>{assignment.assignment.description}</Text>
+                        <View style={styles.assignmentMeta}>
+                            <Text style={styles.assignmentMetaText}>
+                                Due: {new Date(assignment.due_date).toLocaleDateString()}
+                            </Text>
+                            {assignment.assignment.duration_minutes && (
+                                <Text style={styles.assignmentMetaText}>
+                                    • {assignment.assignment.duration_minutes} min
+                                </Text>
+                            )}
+                        </View>
+                    </View>
+                    <View style={[styles.assignmentStatus, { backgroundColor: statusDisplay.bgColor }]}>
+                        <Text style={[styles.assignmentStatusText, { color: statusDisplay.color }]}>
+                            {statusDisplay.text}
+                        </Text>
+                    </View>
+                </View>
+
+                <View style={styles.assignmentActions}>
+                    {canStartWorkflow && (
+                        <TouchableOpacity
+                            style={styles.startWorkflowButton}
+                            onPress={() => startAssignmentWorkflow(assignment)}
+                        >
+                            <Text style={styles.startWorkflowButtonText}>Start Assignment</Text>
+                        </TouchableOpacity>
+                    )}
+
+                    <TouchableOpacity
+                        style={isCompleted ? styles.viewResultsButton : styles.viewDetailsButton}
+                        onPress={() => navigateToAssignment(assignment)}
+                    >
+                        <Text style={isCompleted ? styles.viewResultsButtonText : styles.viewDetailsButtonText}>
+                            {isCompleted ? 'View Results' : 'View Details'}
+                        </Text>
+                    </TouchableOpacity>
+                </View>
+
+                {assignment.status === 'graded' && assignment.grade !== undefined && (
+                    <View style={styles.gradeDisplay}>
+                        <Text style={styles.gradeText}>Grade: {assignment.grade}%</Text>
+                        {assignment.feedback && (
+                            <Text style={styles.feedbackText} numberOfLines={2}>
+                                {assignment.feedback}
+                            </Text>
+                        )}
+                    </View>
+                )}
             </View>
-        </View>
-    );
+        );
+    };
+
+    // Render assignments tab content
+    const adaptDefinition = (definition: CourseAssignment): StudentAssignment => ({
+        id: definition.id,
+        user_id: -1,
+        assignment_id: definition.id,
+        course_id: definition.course_id,
+        assigned_at: definition.created_at,
+        due_date: definition.due_days_after_assignment
+            ? new Date(Date.now() + definition.due_days_after_assignment * 86400000).toISOString()
+            : definition.created_at,
+        status: 'assigned',
+        created_at: definition.created_at,
+        updated_at: definition.updated_at,
+        assignment: definition
+    });
+
+    const renderAssignmentsContent = () => {
+        if (loadingAssignments) {
+            return (
+                <View style={styles.loadingContainer}>
+                    <ActivityIndicator size="large" color="#007AFF" />
+                    <Text style={styles.loadingText}>Loading assignments...</Text>
+                </View>
+            );
+        }
+
+        const hasStudent = assignments.length > 0;
+        const hasDefinitions = rawAssignments.length > 0;
+
+        if (!hasStudent && !hasDefinitions) {
+            return (
+                <View style={styles.emptyContainer}>
+                    <Text style={styles.emptyText}>No assignments available</Text>
+                    <Text style={styles.emptySubtext}>Your instructor hasn't added assignments yet.</Text>
+                </View>
+            );
+        }
+        // Always show available definitions section. Filter out ones already assigned to avoid duplication.
+        const assignedDefinitionIds = new Set(
+            assignments
+                .map(a => (a.assignment?.id ?? a.assignment_id))
+                .filter(id => typeof id === 'number')
+        );
+        const availableDefinitionAdapters = hasDefinitions
+            ? rawAssignments
+                .filter(def => !assignedDefinitionIds.has(def.id))
+                .map(adaptDefinition)
+            : [];
+
+        return (
+            <View style={styles.contentContainer}>
+                <View style={styles.assignmentWorkflowInfo}>
+                    <Text style={styles.workflowInfoTitle}>📚 Assignment Workflow</Text>
+                    <Text style={styles.workflowInfoText}>
+                        Read course → Complete assignment → Upload images → Auto-grade → View results
+                    </Text>
+                </View>
+                {hasStudent && (
+                    <View style={{ marginBottom: 16 }}>
+                        <Text style={styles.sectionHeading}>Your Assigned Work ({assignments.length})</Text>
+                        {assignments.map(renderAssignmentCard)}
+                    </View>
+                )}
+                {hasDefinitions && (
+                    <View style={{ marginBottom: 8 }}>
+                        <Text style={styles.sectionHeading}>Available Assignments ({availableDefinitionAdapters.length})</Text>
+                        {availableDefinitionAdapters.length > 0 ? (
+                            availableDefinitionAdapters.map(renderAssignmentCard)
+                        ) : (
+                            <Text style={{ fontSize: 13, color: '#666', marginTop: 4 }}>
+                                All available assignments have already been assigned to you.
+                            </Text>
+                        )}
+                    </View>
+                )}
+            </View>
+        );
+    };
 
     return (
         <SafeAreaView style={styles.container}>
@@ -503,6 +886,12 @@ const styles = StyleSheet.create({
         fontWeight: 'bold',
         color: '#1a1a1a',
         flex: 1,
+    },
+    sectionHeading: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#222',
+        marginBottom: 6
     },
     loadingContainer: {
         flex: 1,
@@ -636,6 +1025,17 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: '#666',
         lineHeight: 20,
+    },
+    enrollButton: {
+        paddingVertical: 12,
+        backgroundColor: '#007AFF',
+        borderRadius: 8,
+        alignItems: 'center',
+    },
+    enrollButtonText: {
+        color: '#fff',
+        fontSize: 16,
+        fontWeight: '600',
     },
     tabContainer: {
         flexDirection: 'row',
@@ -850,5 +1250,126 @@ const styles = StyleSheet.create({
         color: '#fff',
         fontSize: 14,
         fontWeight: '600',
+    },
+    // Workflow styles
+    assignmentWorkflowInfo: {
+        backgroundColor: '#E3F2FD',
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 16,
+    },
+    workflowInfoTitle: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#1a1a1a',
+        marginBottom: 8,
+    },
+    workflowInfoText: {
+        fontSize: 14,
+        color: '#666',
+        lineHeight: 20,
+    },
+    assignmentWorkflowCard: {
+        backgroundColor: '#fff',
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 12,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 2,
+    },
+    assignmentHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        marginBottom: 12,
+    },
+    assignmentInfo: {
+        flex: 1,
+        marginRight: 12,
+    },
+    assignmentWorkflowTitle: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        color: '#1a1a1a',
+        marginBottom: 4,
+    },
+    assignmentMeta: {
+        flexDirection: 'row',
+        marginTop: 4,
+    },
+    assignmentMetaText: {
+        fontSize: 12,
+        color: '#666',
+        marginRight: 8,
+    },
+    assignmentStatus: {
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 16,
+    },
+    assignmentStatusText: {
+        fontSize: 12,
+        fontWeight: '600',
+    },
+    assignmentActions: {
+        flexDirection: 'row',
+        gap: 8,
+        marginTop: 12,
+    },
+    startWorkflowButton: {
+        flex: 1,
+        paddingVertical: 12,
+        backgroundColor: '#007AFF',
+        borderRadius: 8,
+        alignItems: 'center',
+    },
+    startWorkflowButtonText: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: '600',
+    },
+    viewDetailsButton: {
+        flex: 1,
+        paddingVertical: 12,
+        backgroundColor: '#f0f0f0',
+        borderRadius: 8,
+        alignItems: 'center',
+    },
+    viewDetailsButtonText: {
+        color: '#007AFF',
+        fontSize: 14,
+        fontWeight: '600',
+    },
+    viewResultsButton: {
+        flex: 1,
+        paddingVertical: 12,
+        backgroundColor: '#28A745',
+        borderRadius: 8,
+        alignItems: 'center',
+    },
+    viewResultsButtonText: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: '600',
+    },
+    gradeDisplay: {
+        backgroundColor: '#f8f9fa',
+        borderRadius: 8,
+        padding: 12,
+        marginTop: 12,
+    },
+    gradeText: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: '#28A745',
+        marginBottom: 4,
+    },
+    feedbackText: {
+        fontSize: 12,
+        color: '#666',
+        lineHeight: 16,
     },
 });

@@ -53,7 +53,22 @@ export type RootStackParamList = {
         lessonTitle: string;
         courseTitle: string;
     };
-    CourseAssignments: { courseId: number; courseTitle: string };
+    // Many screens navigate using both 'CourseAssignments' and 'CourseAssignment'.
+    // Support both route names pointing to the same screen component and params.
+    CourseAssignments: {
+        courseId: number;
+        courseTitle: string;
+        assignmentId?: number;
+        assignmentTitle?: string;
+        startWorkflow?: boolean;
+    };
+    CourseAssignment: {
+        courseId: number;
+        courseTitle: string;
+        assignmentId?: number;
+        assignmentTitle?: string;
+        startWorkflow?: boolean;
+    };
     CourseSearch: undefined;
     // Grades Management
     GradesOverview: undefined;
@@ -138,6 +153,11 @@ export const AppNavigator: React.FC = () => {
                 />
                 <Stack.Screen
                     name="CourseAssignments"
+                    component={CourseAssignmentScreen}
+                />
+                {/* Alias route so navigation.navigate('CourseAssignment', ...) also works */}
+                <Stack.Screen
+                    name="CourseAssignment"
                     component={CourseAssignmentScreen}
                 />
                 <Stack.Screen

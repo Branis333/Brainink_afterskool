@@ -7,16 +7,16 @@ echo ✅ GOOD NEWS: Your app.json is already configured for the brain logo!
 echo.
 
 echo 📋 Current Configuration:
-echo - App Icon: ./assets/brain-logo.png
-echo - Splash Screen: ./assets/brain-logo.png  
-echo - Android Adaptive Icon: ./assets/brain-logo.png
+echo - App Icon: ./assets/brain-logo.jpg
+echo - Splash Screen: ./assets/brain-logo.jpg
+echo - Android Adaptive Icon: ./assets/brain-logo.jpg
 echo.
 
 echo 🎯 WHAT YOU NEED TO DO:
 echo.
 echo 1. SAVE YOUR BRAIN LOGO IMAGE:
 echo    - Right-click the blue brain image
-echo    - Save as: c:\Users\HP\Skana\assets\brain-logo.png
+echo    - Save as: c:\Users\HP\Skana\assets\brain-logo.jpg
 echo    - Replace the existing placeholder file
 echo    - Make sure it's PNG format
 echo.

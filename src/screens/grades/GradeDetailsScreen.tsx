@@ -17,7 +17,7 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../navigation/AppNavigatorNew';
 import { useAuth } from '../../context/AuthContext';
-import { gradesService, AISubmission } from '../../services/gradesService';
+import { gradesService, AISubmission, StudentAssignment } from '../../services/gradesService';
 
 const { width } = Dimensions.get('window');
 
@@ -34,6 +34,15 @@ export const GradeDetailsScreen: React.FC = () => {
     const [submission, setSubmission] = useState<AISubmission | null>(null);
     const [showFeedbackModal, setShowFeedbackModal] = useState(false);
     const [activeTab, setActiveTab] = useState<'overview' | 'feedback' | 'improvements'>('overview');
+    const [nextAssignment, setNextAssignment] = useState<StudentAssignment | null>(null);
+    const [workflowContext, setWorkflowContext] = useState<{
+        canContinue: boolean;
+        nextAction: string;
+        courseId?: number;
+    }>({
+        canContinue: false,
+        nextAction: 'No next steps available'
+    });
 
     useEffect(() => {
         loadSubmissionDetails();
@@ -49,6 +58,34 @@ export const GradeDetailsScreen: React.FC = () => {
             setLoading(true);
             const submissionData = await gradesService.getAISubmission(submissionId, token);
             setSubmission(submissionData);
+
+            // Load workflow context - find next available assignment
+            try {
+                const assignments = await gradesService.getStudentAssignments(1, token, { limit: 20 });
+                const availableAssignments = assignments.filter(a => a.status === 'assigned');
+
+                if (availableAssignments.length > 0) {
+                    setNextAssignment(availableAssignments[0]);
+                    setWorkflowContext({
+                        canContinue: true,
+                        nextAction: 'Start next assignment',
+                        courseId: availableAssignments[0].course_id
+                    });
+                } else {
+                    const canContinueLearning = assignments.some(a => a.status === 'graded');
+                    setWorkflowContext({
+                        canContinue: canContinueLearning,
+                        nextAction: canContinueLearning ? 'Continue learning' : 'Complete more course content'
+                    });
+                }
+            } catch (workflowError) {
+                console.warn('Error loading workflow context:', workflowError);
+                setWorkflowContext({
+                    canContinue: true,
+                    nextAction: 'Continue learning'
+                });
+            }
+
         } catch (error) {
             console.error('Error loading submission details:', error);
             Alert.alert('Error', 'Failed to load submission details. Please try again.');
@@ -111,6 +148,31 @@ export const GradeDetailsScreen: React.FC = () => {
                 color: '#EF4444',
                 message: 'Don\'t give up! Review the material and ask for help if needed.'
             };
+        }
+    };
+
+    // Workflow Navigation Functions
+    const navigateToNextAssignment = () => {
+        if (nextAssignment) {
+            navigation.navigate('CourseAssignments', {
+                courseId: nextAssignment.course_id,
+                courseTitle: `Course ${nextAssignment.course_id}`
+            });
+        }
+    };
+
+    const continueWorkflowCycle = () => {
+        navigation.navigate('CourseHomepage');
+    };
+
+    const navigateToCourseContent = () => {
+        if (workflowContext.courseId) {
+            navigation.navigate('CourseDetails', {
+                courseId: workflowContext.courseId,
+                courseTitle: `Course ${workflowContext.courseId}`
+            });
+        } else {
+            continueWorkflowCycle();
         }
     };
 
@@ -438,6 +500,48 @@ export const GradeDetailsScreen: React.FC = () => {
                 {activeTab === 'overview' && renderOverviewTab()}
                 {activeTab === 'feedback' && renderFeedbackTab()}
                 {activeTab === 'improvements' && renderImprovementsTab()}
+
+                {/* Workflow Navigation Section */}
+                <View style={styles.workflowSection}>
+                    <View style={styles.workflowHeader}>
+                        <Ionicons name="arrow-forward-circle" size={24} color="#007AFF" />
+                        <Text style={styles.workflowTitle}>Continue Your Learning Journey</Text>
+                    </View>
+                    <Text style={styles.workflowDescription}>
+                        {workflowContext.nextAction}
+                    </Text>
+
+                    {workflowContext.canContinue && (
+                        <View style={styles.workflowActions}>
+                            {nextAssignment && (
+                                <TouchableOpacity
+                                    style={styles.workflowButton}
+                                    onPress={navigateToNextAssignment}
+                                >
+                                    <Text style={styles.workflowButtonText}>Next Assignment</Text>
+                                    <Ionicons name="arrow-forward" size={16} color="#fff" />
+                                </TouchableOpacity>
+                            )}
+
+                            <TouchableOpacity
+                                style={[styles.workflowButton, styles.workflowButtonSecondary]}
+                                onPress={navigateToCourseContent}
+                            >
+                                <Text style={[styles.workflowButtonText, styles.workflowButtonTextSecondary]}>
+                                    Course Content
+                                </Text>
+                                <Ionicons name="book" size={16} color="#007AFF" />
+                            </TouchableOpacity>
+
+                            <TouchableOpacity
+                                style={styles.continueButton}
+                                onPress={continueWorkflowCycle}
+                            >
+                                <Text style={styles.continueButtonText}>Home</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
+                </View>
             </ScrollView>
         </SafeAreaView>
     );
@@ -794,6 +898,83 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: '#D1D5DB',
         marginTop: 4,
+        textAlign: 'center',
+    },
+    // Workflow Navigation Styles
+    workflowSection: {
+        backgroundColor: '#fff',
+        borderRadius: 12,
+        padding: 16,
+        margin: 16,
+        marginTop: 24,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
+        borderLeftWidth: 4,
+        borderLeftColor: '#007AFF',
+    },
+    workflowHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    workflowTitle: {
+        fontSize: 18,
+        fontWeight: '600',
+        color: '#1a1a1a',
+        marginLeft: 8,
+    },
+    workflowDescription: {
+        fontSize: 14,
+        color: '#666',
+        marginBottom: 16,
+        lineHeight: 20,
+    },
+    workflowActions: {
+        flexDirection: 'row',
+        gap: 8,
+        flexWrap: 'wrap',
+    },
+    workflowButton: {
+        backgroundColor: '#007AFF',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        flex: 1,
+        minWidth: 120,
+    },
+    workflowButtonSecondary: {
+        backgroundColor: '#F0F8FF',
+        borderWidth: 1,
+        borderColor: '#007AFF',
+    },
+    workflowButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    workflowButtonTextSecondary: {
+        color: '#007AFF',
+    },
+    continueButton: {
+        backgroundColor: '#F8F9FA',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#DEE2E6',
+        flex: 1,
+        minWidth: 80,
+    },
+    continueButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#495057',
         textAlign: 'center',
     },
 });

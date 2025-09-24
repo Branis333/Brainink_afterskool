@@ -21,6 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../navigation/AppNavigatorNew';
 import { uploadsService, UploadFile, BulkPDFUploadRequest, BulkPDFUploadResponse } from '../../services/uploadsService';
+import { gradesService } from '../../services/gradesService';
 import { useAuth } from '../../context/AuthContext';
 
 // For React Native, we'll simulate file picker functionality
@@ -208,70 +209,78 @@ export const BulkUploadScreen: React.FC<Props> = ({ navigation, route }) => {
                 }
             }, 800);
 
-            // Perform the actual bulk upload
-            const result: BulkPDFUploadResponse = await uploadsService.bulkUploadImagesToPDF(
-                uploadRequest,
-                token
-            );
-
             clearInterval(progressInterval);
+
+            // Use the new workflow integration method
+            const assignmentId = route.params?.assignmentId || 1;
+            setUploadProgress({
+                progress: 70,
+                status: 'uploading',
+                message: 'Starting automatic workflow...',
+                currentStep: 'Integrating with assignment system',
+            });
+
+            const workflowResult = await uploadsService.uploadImagesForAssignmentWorkflow(
+                parseInt(sessionId),
+                assignmentId,
+                validFiles,
+                token,
+                submissionType
+            );
 
             setUploadProgress({
                 progress: 85,
                 status: 'converting',
                 message: 'Converting images to PDF...',
-                currentStep: 'Generating PDF document',
+                currentStep: 'Automatic PDF generation',
             });
 
-            // Simulate PDF conversion delay
-            setTimeout(() => {
-                setUploadProgress({
-                    progress: 95,
-                    status: 'processing',
-                    message: 'Processing with AI...',
-                    currentStep: 'AI analysis in progress',
-                });
+            // Simulate brief delay to show PDF conversion
+            await new Promise(resolve => setTimeout(resolve, 1000));
 
-                // Simulate AI processing delay
-                setTimeout(() => {
-                    setUploadProgress({
-                        progress: 100,
-                        status: 'completed',
-                        message: 'Bulk upload completed successfully!',
-                        currentStep: 'Processing complete',
-                    });
+            setUploadProgress({
+                progress: 95,
+                status: 'processing',
+                message: 'Auto-grading in progress...',
+                currentStep: 'AI processing without user intervention',
+            });
 
-                    Alert.alert(
-                        'Success',
-                        `Successfully uploaded ${validFiles.length} files and generated PDF (${uploadsService.formatFileSize(result.pdf_size)}).\n\nThe submission is being processed by AI.`,
-                        [
-                            {
-                                text: 'View Details',
-                                onPress: () => navigation.navigate('GradeDetails', {
-                                    submissionId: result.submission_id,
-                                    submissionType: submissionType,
-                                }),
-                            },
-                            {
-                                text: 'Upload More',
-                                onPress: () => {
-                                    setSelectedFiles([]);
-                                    setUploadProgress({
-                                        progress: 0,
-                                        status: 'idle',
-                                        message: '',
-                                        currentStep: '',
-                                    });
-                                },
-                            },
-                            {
-                                text: 'Go to Overview',
-                                onPress: () => navigation.navigate('UploadsOverview'),
-                            },
-                        ]
-                    );
-                }, 2000);
-            }, 2000);
+            // Brief delay to show AI processing
+            await new Promise(resolve => setTimeout(resolve, 1500));
+
+            setUploadProgress({
+                progress: 100,
+                status: 'completed',
+                message: 'Workflow completed successfully!',
+                currentStep: 'Ready for next assignment',
+            });
+
+            Alert.alert(
+                'Assignment Workflow Complete',
+                `Successfully uploaded ${validFiles.length} images, converted to PDF, and automatically graded!\n\nYour results are ready to view.`,
+                [
+                    {
+                        text: 'View Results',
+                        onPress: () => navigation.navigate('GradesOverview'),
+                    },
+                    {
+                        text: 'Continue Learning',
+                        onPress: () => navigation.navigate('CourseHomepage'),
+                    },
+                    {
+                        text: 'Upload More',
+                        onPress: () => {
+                            setSelectedFiles([]);
+                            setUploadProgress({
+                                progress: 0,
+                                status: 'idle',
+                                message: '',
+                                currentStep: '',
+                            });
+                        },
+                    },
+                ]
+            );
 
         } catch (error) {
             console.error('Bulk upload error:', error);

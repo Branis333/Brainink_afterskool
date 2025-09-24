@@ -23,7 +23,9 @@ import {
     PendingSubmissionsResponse,
     PendingSubmissionsByCourse,
     BulkGradingResponse,
-    KANAGradingRequest
+    KANAGradingRequest,
+    StudentAssignment,
+    AutoGradingResponse
 } from '../../services/gradesService';
 
 const { width } = Dimensions.get('window');
@@ -48,6 +50,18 @@ export const AIGradingStatusScreen: React.FC = () => {
         progressData: {}
     });
     const [showGradingModal, setShowGradingModal] = useState(false);
+    const [recentAssignments, setRecentAssignments] = useState<StudentAssignment[]>([]);
+    const [autoGradingQueue, setAutoGradingQueue] = useState<{
+        processing: boolean;
+        completedCount: number;
+        totalCount: number;
+        currentAssignment?: string;
+    }>({
+        processing: false,
+        completedCount: 0,
+        totalCount: 0
+    });
+    const [workflowEnabled, setWorkflowEnabled] = useState(true);
     const [selectedCourse, setSelectedCourse] = useState<number | null>(null);
     const [lastGradingResults, setLastGradingResults] = useState<BulkGradingResponse | null>(null);
     const progressAnimation = useState(new Animated.Value(0))[0];
@@ -63,6 +77,26 @@ export const AIGradingStatusScreen: React.FC = () => {
 
             const pendingSubmissions = await gradesService.getPendingSubmissionsForGrading(token);
             setPendingData(pendingSubmissions);
+
+            // Load recent assignments for workflow tracking
+            try {
+                const assignments = await gradesService.getStudentAssignments(1, token, { limit: 10 });
+                setRecentAssignments(assignments);
+
+                // Check for automatic grading in progress
+                const submittedAssignments = assignments.filter(a => a.status === 'submitted');
+                if (submittedAssignments.length > 0 && workflowEnabled) {
+                    // Simulate checking for automatic grading status
+                    setAutoGradingQueue({
+                        processing: submittedAssignments.length > 0,
+                        completedCount: assignments.filter(a => a.status === 'graded').length,
+                        totalCount: assignments.length,
+                        currentAssignment: submittedAssignments[0]?.id ? `Assignment ${submittedAssignments[0].assignment_id}` : undefined
+                    });
+                }
+            } catch (assignmentError) {
+                console.warn('Error loading assignments:', assignmentError);
+            }
 
         } catch (error) {
             console.error('Error loading pending submissions:', error);
@@ -104,6 +138,31 @@ export const AIGradingStatusScreen: React.FC = () => {
     const onRefresh = () => {
         setRefreshing(true);
         loadPendingSubmissions(true);
+    };
+
+    // Workflow Navigation Functions
+    const navigateToRecentResults = () => {
+        const gradedAssignment = recentAssignments.find(a => a.status === 'graded');
+        if (gradedAssignment) {
+            navigation.navigate('GradeDetails', {
+                submissionId: gradedAssignment.id,
+                submissionType: 'homework' as const
+            });
+        }
+    };
+
+    const continueWorkflowCycle = () => {
+        navigation.navigate('CourseHomepage');
+    };
+
+    const navigateToAssignments = () => {
+        const nextAssignment = recentAssignments.find(a => a.status === 'assigned');
+        if (nextAssignment) {
+            navigation.navigate('CourseAssignments', {
+                courseId: nextAssignment.course_id,
+                courseTitle: `Course ${nextAssignment.course_id}`
+            });
+        }
     };
 
     const startBulkGrading = async (courseId: number, gradeAllStudents: boolean = true) => {
@@ -192,6 +251,75 @@ export const AIGradingStatusScreen: React.FC = () => {
             });
         }
     };
+
+    const renderAutomaticGradingCard = () => (
+        <View style={styles.automaticGradingCard}>
+            <View style={styles.automaticGradingHeader}>
+                <Ionicons
+                    name={autoGradingQueue.processing ? "sync" : "checkmark-circle"}
+                    size={24}
+                    color={autoGradingQueue.processing ? "#FFC107" : "#28a745"}
+                />
+                <Text style={styles.automaticGradingTitle}>
+                    {autoGradingQueue.processing ? "Auto-Grading in Progress" : "Automatic Grading"}
+                </Text>
+            </View>
+
+            {autoGradingQueue.processing ? (
+                <View style={styles.gradingProgress}>
+                    <Text style={styles.gradingProgressText}>
+                        Processing: {autoGradingQueue.currentAssignment}
+                    </Text>
+                    <Text style={styles.gradingProgressCount}>
+                        {autoGradingQueue.completedCount}/{autoGradingQueue.totalCount} assignments processed
+                    </Text>
+                    <View style={styles.progressBarContainer}>
+                        <View
+                            style={[
+                                styles.progressBar,
+                                { width: `${(autoGradingQueue.completedCount / autoGradingQueue.totalCount) * 100}%` }
+                            ]}
+                        />
+                    </View>
+                </View>
+            ) : (
+                <Text style={styles.automaticGradingDescription}>
+                    Assignments are automatically graded when submitted. No manual intervention required.
+                </Text>
+            )}
+
+            <View style={styles.workflowActions}>
+                {recentAssignments.some(a => a.status === 'graded') && (
+                    <TouchableOpacity
+                        style={styles.workflowActionButton}
+                        onPress={navigateToRecentResults}
+                    >
+                        <Text style={styles.workflowActionText}>View Results</Text>
+                        <Ionicons name="eye" size={16} color="#fff" />
+                    </TouchableOpacity>
+                )}
+
+                {recentAssignments.some(a => a.status === 'assigned') && (
+                    <TouchableOpacity
+                        style={[styles.workflowActionButton, styles.workflowActionButtonSecondary]}
+                        onPress={navigateToAssignments}
+                    >
+                        <Text style={[styles.workflowActionText, styles.workflowActionTextSecondary]}>
+                            Next Assignment
+                        </Text>
+                        <Ionicons name="arrow-forward" size={16} color="#007AFF" />
+                    </TouchableOpacity>
+                )}
+
+                <TouchableOpacity
+                    style={styles.continueWorkflowButton}
+                    onPress={continueWorkflowCycle}
+                >
+                    <Text style={styles.continueWorkflowText}>Continue Learning</Text>
+                </TouchableOpacity>
+            </View>
+        </View>
+    );
 
     const renderStatusCard = () => (
         <View style={styles.statusCard}>
@@ -446,6 +574,7 @@ export const AIGradingStatusScreen: React.FC = () => {
                 }
                 showsVerticalScrollIndicator={false}
             >
+                {renderAutomaticGradingCard()}
                 {renderStatusCard()}
                 {renderResultsCard()}
 
@@ -804,5 +933,107 @@ const styles = StyleSheet.create({
         color: '#9CA3AF',
         textAlign: 'center',
         lineHeight: 16,
+    },
+    // Automatic Grading Card Styles
+    automaticGradingCard: {
+        backgroundColor: '#fff',
+        borderRadius: 12,
+        padding: 16,
+        marginHorizontal: 16,
+        marginBottom: 16,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
+        borderLeftWidth: 4,
+        borderLeftColor: '#28a745',
+    },
+    automaticGradingHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 12,
+    },
+    automaticGradingTitle: {
+        fontSize: 18,
+        fontWeight: '600',
+        color: '#1a1a1a',
+        marginLeft: 8,
+    },
+    automaticGradingDescription: {
+        fontSize: 14,
+        color: '#666',
+        marginBottom: 16,
+        lineHeight: 20,
+    },
+    gradingProgress: {
+        marginBottom: 16,
+    },
+    gradingProgressText: {
+        fontSize: 14,
+        fontWeight: '500',
+        color: '#1a1a1a',
+        marginBottom: 4,
+    },
+    gradingProgressCount: {
+        fontSize: 12,
+        color: '#666',
+        marginBottom: 8,
+    },
+    progressBarContainer: {
+        height: 6,
+        backgroundColor: '#E5E7EB',
+        borderRadius: 3,
+        overflow: 'hidden',
+    },
+    progressBar: {
+        height: '100%',
+        backgroundColor: '#3B82F6',
+        borderRadius: 3,
+    },
+    workflowActions: {
+        flexDirection: 'row',
+        gap: 8,
+        flexWrap: 'wrap',
+    },
+    workflowActionButton: {
+        backgroundColor: '#007AFF',
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        flex: 1,
+        minWidth: 120,
+    },
+    workflowActionButtonSecondary: {
+        backgroundColor: '#F0F8FF',
+        borderWidth: 1,
+        borderColor: '#007AFF',
+    },
+    workflowActionText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    workflowActionTextSecondary: {
+        color: '#007AFF',
+    },
+    continueWorkflowButton: {
+        backgroundColor: '#F8F9FA',
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#DEE2E6',
+        flex: 1,
+        minWidth: 140,
+    },
+    continueWorkflowText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#495057',
+        textAlign: 'center',
     },
 });

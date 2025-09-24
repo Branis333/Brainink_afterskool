@@ -23,7 +23,10 @@ import {
     afterSchoolService,
     StudySession,
     CourseLesson,
-    CourseWithLessons
+    CourseBlock,
+    CourseWithLessons,
+    CourseWithBlocks,
+    StudentAssignment
 } from '../../services/afterSchoolService';
 
 type NavigationProp = NativeStackNavigationProp<any>;
@@ -31,8 +34,10 @@ type RouteProp_ = RouteProp<{
     params: {
         sessionId: number;
         courseId: number;
-        lessonId: number;
-        lessonTitle: string;
+        lessonId?: number;  // Optional for lesson-based
+        blockId?: number;   // Optional for block-based
+        lessonTitle?: string;
+        blockTitle?: string;
         courseTitle: string;
     }
 }>;
@@ -45,12 +50,14 @@ interface Props {
 const { width, height } = Dimensions.get('window');
 
 export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
-    const { sessionId, courseId, lessonId, lessonTitle, courseTitle } = route.params;
+    const { sessionId, courseId, lessonId, blockId, lessonTitle, blockTitle, courseTitle } = route.params;
     const { token } = useAuth();
 
     const [session, setSession] = useState<StudySession | null>(null);
     const [lesson, setLesson] = useState<CourseLesson | null>(null);
-    const [course, setCourse] = useState<CourseWithLessons | null>(null);
+    const [block, setBlock] = useState<CourseBlock | null>(null);
+    const [course, setCourse] = useState<CourseWithLessons | CourseWithBlocks | null>(null);
+    const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
     const [loading, setLoading] = useState(true);
     const [sessionTime, setSessionTime] = useState(0); // in seconds
     const [isActive, setIsActive] = useState(true);
@@ -70,16 +77,31 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                 throw new Error('No authentication token available');
             }
 
-            // Load session, lesson, and course data in parallel
-            const [sessionData, lessonData, courseData] = await Promise.all([
-                afterSchoolService.getStudySession(sessionId, token),
-                afterSchoolService.getLessonDetails(courseId, lessonId, token),
-                afterSchoolService.getCourseDetails(courseId, token)
-            ]);
-
+            const sessionData = await afterSchoolService.getStudySession(sessionId, token);
             setSession(sessionData);
-            setLesson(lessonData);
-            setCourse(courseData);
+
+            // Load different data based on session type (lesson or block)
+            if (blockId && sessionData.block_id) {
+                // Block-based session
+                const [blockData, courseData, assignmentsData] = await Promise.all([
+                    afterSchoolService.getCourseBlockDetails(courseId, blockId, token),
+                    afterSchoolService.getCourseWithBlocks(courseId, token),
+                    afterSchoolService.getCourseAssignments(courseId, token, { block_id: blockId }).catch(() => [])
+                ]);
+                setBlock(blockData);
+                setCourse(courseData);
+                setAssignments(assignmentsData);
+            } else if (lessonId && sessionData.lesson_id) {
+                // Lesson-based session
+                const [lessonData, courseData] = await Promise.all([
+                    afterSchoolService.getLessonDetails(courseId, lessonId, token),
+                    afterSchoolService.getCourseDetails(courseId, token)
+                ]);
+                setLesson(lessonData);
+                setCourse(courseData);
+                setAssignments([]);
+            }
+
             setCompletionPercentage(sessionData.completion_percentage);
 
             // Calculate elapsed time if session is ongoing
@@ -184,17 +206,45 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
         }
     };
 
-    // Mark lesson as completed
-    const markLessonCompleted = () => {
+    // Navigate to assignment workflow
+    const navigateToAssignment = (assignment: StudentAssignment) => {
+        navigation.navigate('CourseAssignment', {
+            courseId,
+            assignmentId: assignment.assignment_id,
+            assignmentTitle: `Assignment ${assignment.assignment_id}`
+        });
+    };
+
+    // Continue to assignments after completing session
+    const continueToAssignments = () => {
+        const pendingAssignment = assignments.find(a => a.status === 'assigned');
+        if (pendingAssignment) {
+            navigateToAssignment(pendingAssignment);
+        } else {
+            // Navigate to course details to see all assignments
+            navigation.navigate('CourseDetails', { courseId, courseTitle });
+        }
+    };
+
+    // Mark lesson/block as completed
+    const markContentCompleted = () => {
         setCompletionPercentage(100);
+
+        const contentType = block ? 'Block' : 'Lesson';
+        const hasPendingAssignments = assignments.some(a => a.status === 'assigned');
+
         Alert.alert(
-            'Lesson Completed!',
-            'Great job! You have completed this lesson.',
+            `${contentType} Completed!`,
+            `Great job! You have completed this ${contentType.toLowerCase()}.`,
             [
                 {
                     text: 'Continue Studying',
                     style: 'default'
                 },
+                ...(hasPendingAssignments ? [{
+                    text: 'Continue to Assignments',
+                    onPress: continueToAssignments
+                }] : []),
                 {
                     text: 'End Session',
                     onPress: () => endStudySession('completed')
@@ -237,7 +287,7 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
         );
     }
 
-    if (!session || !lesson) {
+    if (!session || (!lesson && !block)) {
         return (
             <SafeAreaView style={styles.container}>
                 <View style={styles.errorContainer}>
@@ -265,8 +315,15 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                 </TouchableOpacity>
 
                 <View style={styles.sessionInfo}>
-                    <Text style={styles.sessionTitle} numberOfLines={1}>{lessonTitle}</Text>
+                    <Text style={styles.sessionTitle} numberOfLines={1}>
+                        {blockTitle || lessonTitle}
+                    </Text>
                     <Text style={styles.sessionSubtitle} numberOfLines={1}>{courseTitle}</Text>
+                    {assignments.length > 0 && (
+                        <Text style={styles.assignmentIndicator}>
+                            {assignments.filter(a => a.status === 'assigned').length} assignments pending
+                        </Text>
+                    )}
                 </View>
 
                 <View style={styles.sessionTimer}>
@@ -310,36 +367,61 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
 
                 <TouchableOpacity
                     style={[styles.controlButton, styles.completeButton]}
-                    onPress={markLessonCompleted}
+                    onPress={markContentCompleted}
                 >
                     <Text style={styles.controlButtonText}>Complete</Text>
                 </TouchableOpacity>
             </View>
+
+            {/* Workflow Integration */}
+            {assignments.length > 0 && (
+                <View style={styles.workflowSection}>
+                    <Text style={styles.workflowTitle}>Ready for Assignments</Text>
+                    <TouchableOpacity
+                        style={styles.workflowButton}
+                        onPress={continueToAssignments}
+                    >
+                        <Text style={styles.workflowButtonText}>
+                            Continue to Assignments ({assignments.filter(a => a.status === 'assigned').length} pending)
+                        </Text>
+                    </TouchableOpacity>
+                </View>
+            )}
         </View>
     );
 
-    // Render lesson content
-    const renderLessonContent = () => (
+    // Render content (lesson or block)
+    const renderContentBody = () => (
         <ScrollView style={styles.contentScrollView} showsVerticalScrollIndicator={false}>
             <View style={styles.contentContainer}>
                 {/* Learning Objectives */}
-                {typeof lesson.learning_objectives === 'string' && lesson.learning_objectives.trim().length > 0 && (
+                {block?.learning_objectives?.length > 0 && (
+                    <View style={styles.objectivesCard}>
+                        <Text style={styles.objectivesTitle}>Learning Objectives</Text>
+                        <Text style={styles.objectivesText}>• {block.learning_objectives.join('\n• ')}</Text>
+                    </View>
+                )}
+                {lesson?.learning_objectives && (
                     <View style={styles.objectivesCard}>
                         <Text style={styles.objectivesTitle}>Learning Objectives</Text>
                         <Text style={styles.objectivesText}>{lesson.learning_objectives}</Text>
                     </View>
                 )}
 
-                {/* Lesson Content */}
+                {/* Content */}
                 <View style={styles.lessonContentCard}>
-                    <Text style={styles.lessonContentTitle}>Lesson Content</Text>
-                    {lesson.content ? (
-                        <Text style={styles.lessonContentText}>{lesson.content}</Text>
+                    <Text style={styles.lessonContentTitle}>
+                        {block ? 'Block Content' : 'Lesson Content'}
+                    </Text>
+                    {(block?.content || lesson?.content) ? (
+                        <Text style={styles.lessonContentText}>
+                            {block?.content || lesson?.content}
+                        </Text>
                     ) : (
                         <View style={styles.noContentContainer}>
                             <Text style={styles.noContentText}>No content available</Text>
                             <Text style={styles.noContentSubtext}>
-                                Content for this lesson will be added soon
+                                Content for this {block ? 'block' : 'lesson'} will be added soon
                             </Text>
                         </View>
                     )}
@@ -452,7 +534,7 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
     return (
         <SafeAreaView style={styles.container}>
             {renderSessionHeader()}
-            {renderLessonContent()}
+            {renderContentBody()}
             {renderEndSessionModal()}
         </SafeAreaView>
     );
@@ -768,6 +850,40 @@ const styles = StyleSheet.create({
     modalButtonTextWhite: {
         fontSize: 16,
         color: '#fff',
+        fontWeight: '600',
+    },
+    assignmentIndicator: {
+        backgroundColor: '#FFF3CD',
+        padding: 12,
+        borderRadius: 8,
+        marginVertical: 8,
+        borderLeftWidth: 4,
+        borderLeftColor: '#FFC107',
+    },
+    workflowSection: {
+        backgroundColor: '#F8F9FA',
+        padding: 16,
+        borderRadius: 12,
+        marginVertical: 8,
+        borderWidth: 1,
+        borderColor: '#DEE2E6',
+    },
+    workflowTitle: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#495057',
+        marginBottom: 12,
+    },
+    workflowButton: {
+        backgroundColor: '#007bff',
+        paddingVertical: 12,
+        paddingHorizontal: 20,
+        borderRadius: 8,
+        alignItems: 'center',
+    },
+    workflowButtonText: {
+        color: '#fff',
+        fontSize: 16,
         fontWeight: '600',
     },
 });

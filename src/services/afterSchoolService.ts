@@ -14,7 +14,7 @@ const getBackendUrl = () => {
 // TYPESCRIPT INTERFACES
 // ===============================
 
-// Course Interfaces
+
 export interface CourseCreate {
     title: string;
     subject: string;
@@ -44,6 +44,13 @@ export interface Course {
     difficulty_level: string;
     created_by: number;
     is_active: boolean;
+
+    // Enhanced course structure fields
+    total_weeks: number;
+    blocks_per_week: number;
+    textbook_source?: string;
+    generated_by_ai: boolean;
+
     created_at: string;
     updated_at: string;
 }
@@ -83,10 +90,91 @@ export interface CourseWithLessons extends Course {
     lessons: CourseLesson[];
 }
 
+// Course Block Interfaces (for AI-generated courses)
+export interface CourseBlock {
+    id: number;
+    course_id: number;
+    week: number;
+    block_number: number;
+    title: string;
+    description?: string;
+    learning_objectives?: string[];
+    content?: string;
+    duration_minutes: number;
+    resources?: Array<{ type: string; title: string; url: string }>;
+    is_active: boolean;
+    created_at: string;
+    updated_at: string;
+}
+
+// Course Assignment Interfaces
+export interface CourseAssignment {
+    id: number;
+    course_id: number;
+    title: string;
+    description: string;
+    assignment_type: 'homework' | 'quiz' | 'project' | 'assessment';
+    instructions?: string;
+    duration_minutes: number;
+    points: number;
+    rubric?: string;
+    week_assigned?: number;
+    block_id?: number;
+    due_days_after_assignment: number;
+    submission_format?: string;
+    learning_outcomes?: string[];
+    generated_by_ai: boolean;
+    is_active: boolean;
+    created_at: string;
+    updated_at: string;
+}
+
+// Student Assignment Interfaces
+export interface StudentAssignment {
+    id: number;
+    user_id: number;
+    assignment_id: number;
+    course_id: number;
+    assigned_at: string;
+    due_date: string;
+    submitted_at?: string;
+    status: 'assigned' | 'submitted' | 'graded' | 'overdue';
+    submission_file_path?: string;
+    submission_content?: string;
+    grade?: number;
+    ai_grade?: number;
+    manual_grade?: number;
+    feedback?: string;
+    created_at: string;
+    updated_at: string;
+
+    // Populated assignment details
+    assignment?: CourseAssignment;
+}
+
+export interface CourseWithBlocks extends Course {
+    blocks: CourseBlock[];
+    assignments: CourseAssignment[];
+}
+
+export interface ComprehensiveCourse extends Course {
+    blocks: CourseBlock[];
+    lessons: CourseLesson[];
+    assignments: CourseAssignment[];
+    total_blocks: number;
+    estimated_total_duration: number;
+}
+
+// Unified shape returned by getUnifiedCourse (may normalize partial backend responses)
+export interface UnifiedCourse extends ComprehensiveCourse {
+    // No extra fields yet; placeholder for future normalization metadata
+}
+
 // Study Session Interfaces
 export interface StudySessionStart {
     course_id: number;
-    lesson_id: number;
+    lesson_id?: number; // Optional for block-based courses
+    block_id?: number;  // For AI-generated course blocks
 }
 
 export interface StudySessionEnd {
@@ -98,7 +186,8 @@ export interface StudySession {
     id: number;
     user_id: number;
     course_id: number;
-    lesson_id: number;
+    lesson_id?: number;  // Optional for block-based sessions
+    block_id?: number;   // For AI-generated course blocks
     started_at: string;
     ended_at?: string;
     duration_minutes?: number;
@@ -220,6 +309,120 @@ export interface CourseFilters {
 }
 
 class AfterSchoolService {
+    private dashboardInFlight: Promise<StudentDashboard> | null = null;
+    /**
+     * Enhanced error handler with specific error types and user-friendly messages
+     */
+    private handleApiError(error: any, context: string): Error {
+        console.error(`❌ ${context}:`, error);
+
+        let userMessage = 'An unexpected error occurred. Please try again.';
+
+        if (error.message) {
+            const errorMsg = error.message.toLowerCase();
+
+            if (errorMsg.includes('database connection error') || errorMsg.includes('connection refused')) {
+                userMessage = 'Unable to connect to the server. Please check your internet connection and try again.';
+            } else if (errorMsg.includes('validation error') || errorMsg.includes('pydantic')) {
+                userMessage = 'Invalid data format. Please contact support if this continues.';
+            } else if (errorMsg.includes('unauthorized') || errorMsg.includes('authentication')) {
+                userMessage = 'Authentication failed. Please log in again.';
+            } else if (errorMsg.includes('not found') || errorMsg.includes('404')) {
+                userMessage = 'The requested content was not found.';
+            } else if (errorMsg.includes('timeout')) {
+                userMessage = 'Request timed out. Please try again.';
+            } else {
+                userMessage = error.message;
+            }
+        }
+
+        return new Error(userMessage);
+    }
+    // Cache: courseId -> raw assignment definitions
+    private assignmentDefinitionsCache: Map<number, CourseAssignment[]> = new Map();
+    private assignmentDefinitionsFetchInFlight: Map<number, Promise<CourseAssignment[]>> = new Map();
+
+    /**
+     * Retry wrapper for API calls with exponential backoff for database connection errors
+     */
+    private async retryApiCall<T>(
+        apiCall: () => Promise<T>,
+        maxRetries: number = 3,
+        baseDelayMs: number = 1000
+    ): Promise<T> {
+        let lastError: Error | null = null;
+
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            try {
+                return await apiCall();
+            } catch (error: any) {
+                lastError = error;
+
+                // Only retry on database connection errors
+                const errorMsg = error.message?.toLowerCase() || '';
+                const isRetryableError = errorMsg.includes('database connection error') ||
+                    errorMsg.includes('connection refused') ||
+                    errorMsg.includes('timeout');
+
+                if (!isRetryableError || attempt === maxRetries) {
+                    throw error;
+                }
+
+                // Exponential backoff with jitter
+                const delayMs = baseDelayMs * Math.pow(2, attempt - 1) + Math.random() * 1000;
+                console.log(`⏳ Retrying in ${Math.round(delayMs)}ms... (attempt ${attempt}/${maxRetries})`);
+                await new Promise(resolve => setTimeout(resolve, delayMs));
+            }
+        }
+
+        throw lastError || new Error('Retry failed');
+    }
+
+    /**
+     * Sanitize course data to ensure all required fields have proper default values
+     * This handles cases where backend might return null/undefined for new fields
+     */
+    private sanitizeCourseData(course: any): Course {
+        return {
+            ...course,
+            // Ensure new fields have default values if null/undefined
+            total_weeks: course.total_weeks ?? 8,
+            blocks_per_week: course.blocks_per_week ?? 2,
+            textbook_source: course.textbook_source ?? null,
+            textbook_content: course.textbook_content ?? null,
+            generated_by_ai: course.generated_by_ai ?? false,
+
+            // Ensure other fields have sensible defaults
+            description: course.description ?? '',
+            difficulty_level: course.difficulty_level ?? 'beginner',
+            is_active: course.is_active ?? true,
+            age_min: course.age_min ?? 3,
+            age_max: course.age_max ?? 16
+        };
+    }
+
+    /**
+     * Sanitize course list response to handle potential backend issues
+     */
+    private sanitizeCourseListResponse(response: any): CourseListResponse {
+        try {
+            const courses = Array.isArray(response.courses)
+                ? response.courses.map((course: any) => this.sanitizeCourseData(course))
+                : [];
+
+            return {
+                courses,
+                total: response.total ?? courses.length
+            };
+        } catch (error) {
+            console.warn('⚠️ Error sanitizing course list response, returning empty list:', error);
+            return {
+                courses: [],
+                total: 0
+            };
+        }
+    }
+
     private async makeAuthenticatedRequest(
         endpoint: string,
         token: string,
@@ -249,8 +452,16 @@ class AfterSchoolService {
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
             const errorMessage = errorData.detail || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
-            console.error('API Error:', errorData);
-            throw new Error(errorMessage);
+            console.error('API Error:', {
+                endpoint,
+                method,
+                status: response.status,
+                statusText: response.statusText,
+                errorData,
+                requestBody: body ?? null
+            });
+            // Enrich the error message with context to help backend debugging
+            throw new Error(`[${method} ${endpoint}] ${errorMessage}`);
         }
 
         return response;
@@ -286,29 +497,33 @@ class AfterSchoolService {
      * Get list of courses with advanced filtering
      */
     async listCourses(token: string, filters: CourseFilters = {}): Promise<CourseListResponse> {
-        try {
-            console.log('📚 Fetching courses with filters:', filters);
+        return this.retryApiCall(async () => {
+            try {
+                console.log('📚 Fetching courses with filters:', filters);
 
-            // Build query parameters
-            const params = new URLSearchParams();
-            Object.entries(filters).forEach(([key, value]) => {
-                if (value !== undefined && value !== null) {
-                    params.append(key, value.toString());
-                }
-            });
+                // Build query parameters
+                const params = new URLSearchParams();
+                Object.entries(filters).forEach(([key, value]) => {
+                    if (value !== undefined && value !== null) {
+                        params.append(key, value.toString());
+                    }
+                });
 
-            const queryString = params.toString();
-            const endpoint = `/after-school/courses/${queryString ? `?${queryString}` : ''}`;
+                const queryString = params.toString();
+                const endpoint = `/after-school/courses/${queryString ? `?${queryString}` : ''}`;
 
-            const response = await this.makeAuthenticatedRequest(endpoint, token);
-            const data = await response.json();
+                const response = await this.makeAuthenticatedRequest(endpoint, token);
+                const rawData = await response.json();
 
-            console.log('✅ Courses fetched successfully:', data.total, 'courses');
-            return data;
-        } catch (error) {
-            console.error('❌ Error fetching courses:', error);
-            throw error;
-        }
+                // Sanitize the response to handle potential NULL values or schema issues
+                const sanitizedData = this.sanitizeCourseListResponse(rawData);
+
+                console.log('✅ Courses fetched successfully:', sanitizedData.total, 'courses');
+                return sanitizedData;
+            } catch (error) {
+                throw this.handleApiError(error, 'Error fetching courses');
+            }
+        });
     }
 
     /**
@@ -337,10 +552,16 @@ class AfterSchoolService {
             const endpoint = `/after-school/courses/${courseId}${queryString ? `?${queryString}` : ''}`;
 
             const response = await this.makeAuthenticatedRequest(endpoint, token);
-            const data = await response.json();
+            const rawData = await response.json();
 
-            console.log('✅ Course details fetched successfully:', data.title);
-            return data;
+            // Sanitize course data to handle potential NULL values
+            const sanitizedData = {
+                ...this.sanitizeCourseData(rawData),
+                lessons: Array.isArray(rawData.lessons) ? rawData.lessons : []
+            };
+
+            console.log('✅ Course details fetched successfully:', sanitizedData.title);
+            return sanitizedData;
         } catch (error) {
             console.error('❌ Error fetching course details:', error);
             throw error;
@@ -552,20 +773,26 @@ class AfterSchoolService {
      * Get comprehensive student dashboard
      */
     async getStudentDashboard(token: string): Promise<StudentDashboard> {
-        try {
-            console.log('📊 Fetching student dashboard...');
-            const response = await this.makeAuthenticatedRequest(
-                '/after-school/courses/dashboard',
-                token
-            );
-
-            const data = await response.json();
-            console.log('✅ Student dashboard fetched successfully');
-            return data;
-        } catch (error) {
-            console.error('❌ Error fetching student dashboard:', error);
-            throw error;
+        if (this.dashboardInFlight) {
+            return this.dashboardInFlight; // Reuse existing call
         }
+        this.dashboardInFlight = this.retryApiCall(async () => {
+            try {
+                console.log('📊 Fetching student dashboard...');
+                const response = await this.makeAuthenticatedRequest(
+                    '/after-school/courses/dashboard',
+                    token
+                );
+                const data = await response.json();
+                console.log('✅ Student dashboard fetched successfully');
+                return data;
+            } catch (error) {
+                throw this.handleApiError(error, 'Error fetching student dashboard');
+            } finally {
+                this.dashboardInFlight = null;
+            }
+        });
+        return this.dashboardInFlight;
     }
 
     // ===============================
@@ -577,7 +804,23 @@ class AfterSchoolService {
      */
     async startStudySession(sessionData: StudySessionStart, token: string): Promise<StudySession> {
         try {
-            console.log('▶️ Starting study session:', sessionData);
+            // Attempt lightweight JWT decode (header.payload.signature) to extract user id for richer logs
+            let decodedUser: any = null;
+            try {
+                const rawToken = token.startsWith('Bearer ') ? token.split(' ')[1] : token;
+                const parts = rawToken.split('.');
+                if (parts.length >= 2) {
+                    const payloadJson = atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'));
+                    decodedUser = JSON.parse(payloadJson);
+                }
+            } catch (_) {
+                // Ignore decode issues silently
+            }
+            console.log('▶️ Starting study session:', {
+                ...sessionData,
+                decoded_user_id: decodedUser?.id,
+                decoded_username: decodedUser?.uname || decodedUser?.username
+            });
             const response = await this.makeAuthenticatedRequest(
                 '/after-school/sessions/start',
                 token,
@@ -746,8 +989,11 @@ class AfterSchoolService {
     async getStudentProgress(courseId: number, token: string): Promise<StudentProgress> {
         try {
             console.log('📊 Fetching student progress for course:', courseId);
+            // Use the correct endpoint that exists in backend
+            // Backend exposes progress through comprehensive course details or a dedicated endpoint (sessions/progress/{id})
+            // Adjusted path to match backend naming (previous path returned 404)
             const response = await this.makeAuthenticatedRequest(
-                `/after-school/progress/course/${courseId}`,
+                `/after-school/sessions/progress/${courseId}`,
                 token
             );
 
@@ -756,7 +1002,35 @@ class AfterSchoolService {
             return data;
         } catch (error) {
             console.error('❌ Error fetching student progress:', error);
-            throw error;
+            const msg = error.message?.toLowerCase() || '';
+            if (msg.includes('not found') || msg.includes('no progress')) {
+                console.log('ℹ️ No existing progress record. Synthesizing default progress.');
+                // Attempt to pull total lessons from course details to populate totals
+                let totalLessons = 0;
+                try {
+                    const course = await this.getCourseDetails(courseId, token, {});
+                    totalLessons = course.lessons?.length || 0;
+                } catch (_) { /* ignore */ }
+                const now = new Date().toISOString();
+                const fallback: StudentProgress = {
+                    id: 0,
+                    user_id: 0,
+                    course_id: courseId,
+                    lessons_completed: 0,
+                    total_lessons: totalLessons,
+                    completion_percentage: 0,
+                    average_score: undefined,
+                    total_study_time: 0,
+                    sessions_count: 0,
+                    started_at: now,
+                    last_activity: now,
+                    completed_at: undefined,
+                    created_at: now,
+                    updated_at: now,
+                };
+                return fallback;
+            }
+            throw this.handleApiError(error, 'Error fetching student progress');
         }
     }
 
@@ -778,6 +1052,468 @@ class AfterSchoolService {
             return data;
         } catch (error) {
             console.error('❌ Error updating student progress:', error);
+            throw error;
+        }
+    }
+
+    // ===============================
+    // ENHANCED COURSE METHODS
+    // ===============================
+
+    /**
+     * Get comprehensive course details including blocks, assignments, and analytics
+     */
+    async getComprehensiveCourseDetails(
+        courseId: number,
+        token: string,
+        options: {
+            include_stats?: boolean;
+            include_progress?: boolean;
+            include_recommendations?: boolean;
+        } = {}
+    ): Promise<ComprehensiveCourse> {
+        try {
+            console.log('📊 Fetching comprehensive course details for course ID:', courseId);
+
+            const params = new URLSearchParams();
+            Object.entries(options).forEach(([key, value]) => {
+                if (value !== undefined) {
+                    params.append(key, value.toString());
+                }
+            });
+
+            const queryString = params.toString();
+            // Backend exposes this as GET /after-school/courses/{course_id}
+            const endpoint = `/after-school/courses/${courseId}${queryString ? `?${queryString}` : ''}`;
+
+            const response = await this.makeAuthenticatedRequest(endpoint, token);
+            const data = await response.json();
+
+            console.log('✅ Comprehensive course details fetched successfully:', data.title);
+            return data;
+        } catch (error) {
+            console.error('❌ Error fetching comprehensive course details:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Unified course fetch with graceful fallback.
+     * Tries comprehensive → blocks endpoint → basic details.
+     * Always returns a normalized object containing lessons, blocks, assignments arrays.
+     */
+    async getUnifiedCourse(
+        courseId: number,
+        token: string,
+        options: {
+            include_stats?: boolean;
+            include_progress?: boolean;
+            include_recommendations?: boolean;
+        } = {}
+    ): Promise<UnifiedCourse> {
+        // Allow only one in-flight request per course to reduce duplicate network chatter
+        (this as any)._unifiedInFlight = (this as any)._unifiedInFlight || new Map<number, Promise<UnifiedCourse>>();
+        const inFlight: Map<number, Promise<UnifiedCourse>> = (this as any)._unifiedInFlight;
+        if (inFlight.has(courseId)) {
+            return inFlight.get(courseId)!;
+        }
+
+        const p = (async () => {
+            // Attempt comprehensive endpoint first
+            try {
+                const comprehensive = await this.getComprehensiveCourseDetails(courseId, token, options);
+                return {
+                    ...comprehensive,
+                    lessons: Array.isArray((comprehensive as any).lessons) ? (comprehensive as any).lessons : [],
+                    blocks: Array.isArray((comprehensive as any).blocks) ? (comprehensive as any).blocks : [],
+                    assignments: Array.isArray((comprehensive as any).assignments) ? (comprehensive as any).assignments : [],
+                    total_blocks: (comprehensive as any).total_blocks ?? ((comprehensive as any).blocks?.length || 0),
+                    estimated_total_duration: (comprehensive as any).estimated_total_duration ?? 0
+                } as UnifiedCourse;
+            } catch (err) {
+                console.warn('⚠️ Comprehensive course fetch failed, falling back:', err);
+            }
+
+            // Fallback: try blocks endpoint
+            let blocks: CourseBlock[] = [];
+            try {
+                const withBlocks = await this.getCourseWithBlocks(courseId, token);
+                blocks = Array.isArray(withBlocks.blocks) ? withBlocks.blocks : [];
+            } catch (err) {
+                console.warn('⚠️ Blocks fetch failed (may be lesson-based course):', err);
+            }
+
+            // Basic details & lessons
+            let basic: CourseWithLessons | null = null;
+            try {
+                basic = await this.getCourseDetails(courseId, token, options);
+            } catch (err) {
+                console.error('❌ Basic course details fetch failed:', err);
+                throw err; // If even basic fetch fails, propagate
+            }
+
+            return {
+                ...basic,
+                lessons: Array.isArray(basic.lessons) ? basic.lessons : [],
+                blocks,
+                assignments: [],
+                total_blocks: blocks.length,
+                estimated_total_duration: (basic as any).estimated_total_duration ?? 0
+            } as UnifiedCourse;
+        })()
+            .finally(() => {
+                inFlight.delete(courseId);
+            });
+
+        inFlight.set(courseId, p);
+        return p;
+    }
+
+    /**
+     * Enroll in a course
+     */
+    async enrollInCourse(courseId: number, token: string): Promise<MessageResponse> {
+        try {
+            console.log('📚 Enrolling in course ID:', courseId);
+
+            const response = await this.makeAuthenticatedRequest(
+                `/after-school/courses/${courseId}/enroll`,
+                token,
+                'POST'
+            );
+
+            const data = await response.json();
+            console.log('✅ Successfully enrolled in course');
+            return data;
+        } catch (error) {
+            console.error('❌ Error enrolling in course:', error);
+            throw error;
+        }
+    }
+
+    // ===============================
+    // COURSE BLOCKS METHODS
+    // ===============================
+
+    /**
+     * Get course with blocks structure
+     */
+    async getCourseWithBlocks(courseId: number, token: string): Promise<CourseWithBlocks> {
+        try {
+            console.log('📚 Fetching course with blocks for course ID:', courseId);
+
+            const response = await this.makeAuthenticatedRequest(
+                `/after-school/courses/${courseId}/blocks`,
+                token
+            );
+
+            const data = await response.json();
+            console.log('✅ Course with blocks fetched successfully');
+            return data;
+        } catch (error) {
+            console.error('❌ Error fetching course with blocks:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get specific course block details
+     */
+    async getCourseBlockDetails(courseId: number, blockId: number, token: string): Promise<CourseBlock> {
+        try {
+            console.log('📖 Fetching course block details:', blockId);
+
+            const response = await this.makeAuthenticatedRequest(
+                `/after-school/courses/${courseId}/blocks/${blockId}`,
+                token
+            );
+
+            const data = await response.json();
+            console.log('✅ Course block details fetched successfully');
+            return data;
+        } catch (error) {
+            console.error('❌ Error fetching course block details:', error);
+            throw error;
+        }
+    }
+
+    // ===============================
+    // ASSIGNMENT MANAGEMENT METHODS
+    // ===============================
+
+    /**
+     * Get assignments for the current user
+     */
+    async getMyAssignments(
+        token: string,
+        filters: {
+            course_id?: number;
+            status?: 'assigned' | 'submitted' | 'graded' | 'overdue';
+            limit?: number;
+        } = {}
+    ): Promise<StudentAssignment[]> {
+        try {
+            console.log('📋 Fetching user assignments with filters:', filters);
+
+            const params = new URLSearchParams();
+            Object.entries(filters).forEach(([key, value]) => {
+                if (value !== undefined && value !== null) {
+                    params.append(key, value.toString());
+                }
+            });
+
+            const queryString = params.toString();
+            const endpoint = `/after-school/courses/assignments/my-assignments${queryString ? `?${queryString}` : ''}`;
+
+            const response = await this.makeAuthenticatedRequest(endpoint, token);
+            const data = await response.json();
+
+            console.log('✅ User assignments fetched successfully:', data.length);
+            return data;
+        } catch (error) {
+            console.error('❌ Error fetching user assignments:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get assignments for a specific course block
+     */
+    async getBlockAssignments(courseId: number, blockId: number, token: string): Promise<CourseAssignment[]> {
+        try {
+            console.log('📋 Fetching assignments for block:', blockId);
+
+            const response = await this.makeAuthenticatedRequest(
+                `/after-school/courses/${courseId}/blocks/${blockId}/assignments`,
+                token
+            );
+
+            const data = await response.json();
+            console.log('✅ Block assignments fetched successfully:', data.length);
+            return data;
+        } catch (error) {
+            console.error('❌ Error fetching block assignments:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get specific assignment details
+     */
+    async getAssignmentDetails(
+        courseId: number,
+        assignmentId: number,
+        token: string
+    ): Promise<StudentAssignment> {
+        try {
+            console.log('📝 Fetching assignment details for assignment ID:', assignmentId);
+
+            const response = await this.makeAuthenticatedRequest(
+                `/after-school/courses/${courseId}/assignments/${assignmentId}`,
+                token
+            );
+
+            const data = await response.json();
+            console.log('✅ Assignment details fetched successfully');
+            return data;
+        } catch (error) {
+            console.error('❌ Error fetching assignment details:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get assignments available for a specific course (for the workflow: read course → see assignments)
+     */
+    async getCourseAssignments(
+        courseId: number,
+        token: string,
+        filters: {
+            status?: 'assigned' | 'submitted' | 'graded';
+            block_id?: number;
+        } = {}
+    ): Promise<StudentAssignment[]> {
+        try {
+            console.log('📚 Fetching assignments for course ID:', courseId);
+
+            // Use the correct endpoint that exists in backend
+            const params = new URLSearchParams();
+            // Add course filter to get assignments for specific course
+            params.append('course_id', courseId.toString());
+
+            Object.entries(filters).forEach(([key, value]) => {
+                if (value !== undefined && value !== null) {
+                    params.append(key, value.toString());
+                }
+            });
+
+            const queryString = params.toString();
+            const endpoint = `/after-school/courses/assignments/my-assignments${queryString ? `?${queryString}` : ''}`;
+
+            const response = await this.makeAuthenticatedRequest(endpoint, token);
+            const data = await response.json();
+
+            console.log('✅ Course assignments fetched successfully:', Array.isArray(data) ? data.length : 0);
+            return Array.isArray(data) ? data : [];
+        } catch (error) {
+            console.error('❌ Error fetching course assignments:', error);
+            throw this.handleApiError(error, 'Error fetching course assignments');
+        }
+    }
+
+    /**
+     * Fetch raw course assignment definitions (non student-specific).
+     * Backend endpoint expected: GET /after-school/courses/{course_id}/assignments
+     */
+    async getCourseAssignmentDefinitions(courseId: number, token: string): Promise<CourseAssignment[]> {
+        // Serve from cache if present
+        if (this.assignmentDefinitionsCache.has(courseId)) {
+            return this.assignmentDefinitionsCache.get(courseId)!;
+        }
+
+        // Reuse in-flight fetch to avoid duplicate network calls
+        if (this.assignmentDefinitionsFetchInFlight.has(courseId)) {
+            return this.assignmentDefinitionsFetchInFlight.get(courseId)!;
+        }
+
+        const fetchPromise = (async () => {
+            try {
+                console.log('📋 Fetching raw assignment definitions for course ID:', courseId);
+                let response: Response;
+                try {
+                    response = await this.makeAuthenticatedRequest(
+                        `/after-school/courses/${courseId}/assignments`,
+                        token
+                    );
+                } catch (err: any) {
+                    const msg = (err.message || '').toLowerCase();
+                    if (msg.includes('not found') || msg.includes('404')) {
+                        console.warn(`ℹ️ Assignment definitions endpoint not found for course ${courseId}. Returning empty list (backend should implement).`);
+                        this.assignmentDefinitionsCache.set(courseId, []);
+                        return [];
+                    }
+                    throw err;
+                }
+                const data = await response.json();
+                const list = Array.isArray(data) ? data : [];
+                this.assignmentDefinitionsCache.set(courseId, list);
+                console.log('✅ Raw assignment definitions fetched:', list.length);
+                return list;
+            } catch (error) {
+                console.error('❌ Error fetching raw course assignment definitions:', error);
+                throw this.handleApiError(error, 'Error fetching course assignment definitions');
+            } finally {
+                this.assignmentDefinitionsFetchInFlight.delete(courseId);
+            }
+        })();
+
+        this.assignmentDefinitionsFetchInFlight.set(courseId, fetchPromise);
+        return fetchPromise;
+    }
+
+    /**
+     * Submit assignment and trigger auto-grading
+     * This is the core method for your workflow: upload images -> PDF conversion -> auto-grading
+     */
+    async submitAndGradeAssignment(
+        courseId: number,
+        assignmentId: number,
+        token: string,
+        submissionData?: {
+            submission_content?: string;
+            submission_file_path?: string;
+        }
+    ): Promise<{
+        submission: StudentAssignment;
+        grading_results: AIGradingResponse;
+    }> {
+        try {
+            console.log('📤 Submitting and auto-grading assignment:', assignmentId);
+
+            const response = await this.makeAuthenticatedRequest(
+                `/after-school/courses/${courseId}/assignments/${assignmentId}/submit-and-grade`,
+                token,
+                'POST',
+                submissionData
+            );
+
+            const data = await response.json();
+            console.log('✅ Assignment submitted and graded successfully');
+            return data;
+        } catch (error) {
+            console.error('❌ Error submitting and grading assignment:', error);
+            throw error;
+        }
+    }
+
+    // ===============================
+    // INTEGRATED WORKFLOW METHODS (Core workflow: Read -> Assignment -> Upload -> Grade -> Results)
+    // ===============================
+
+    /**
+     * Complete workflow: Upload images for assignment, convert to PDF, and auto-grade
+     * This integrates with the uploads service for the seamless workflow
+     * Core workflow: Read course → Assignment → Upload images → Auto PDF → Auto grade → Results
+     */
+    async submitAssignmentWithImages(
+        courseId: number,
+        assignmentId: number,
+        sessionId: number,
+        imageFiles: any[],
+        token: string,
+        submissionType: 'homework' | 'quiz' | 'practice' | 'assessment' = 'homework'
+    ): Promise<{
+        pdf_submission: any;
+        grading_results: AIGradingResponse;
+        student_assignment: StudentAssignment;
+    }> {
+        try {
+            console.log('🚀 Starting integrated assignment submission workflow');
+            console.log('📋 Course ID:', courseId, 'Assignment ID:', assignmentId, 'Session ID:', sessionId);
+
+            // Step 1: Convert images to PDF using uploads service
+            console.log('📸 Step 1: Converting images to PDF...');
+            const uploadsService = require('./uploadsService').uploadsService;
+
+            const bulkUploadRequest = {
+                session_id: sessionId,
+                submission_type: submissionType,
+                page_count: imageFiles.length,
+                images: imageFiles.map((file, index) => ({
+                    filename: file.name || `image_${index + 1}`,
+                    data: file.data || file.base64 || file
+                }))
+            };
+
+            const pdfSubmission = await uploadsService.bulkUploadImagesToPDF(bulkUploadRequest, token);
+            console.log('✅ Step 1 completed: PDF created with submission ID:', pdfSubmission.submission_id);
+
+            // Step 2: Submit assignment with PDF reference
+            console.log('📤 Step 2: Submitting assignment with PDF...');
+            const submissionData = {
+                submission_content: `PDF submission with ${imageFiles.length} pages`,
+                submission_file_path: pdfSubmission.file_path || `/submissions/${pdfSubmission.submission_id}.pdf`
+            };
+
+            // Step 3: Auto-grade the assignment
+            console.log('🤖 Step 3: Auto-grading assignment...');
+            const gradingResults = await this.submitAndGradeAssignment(
+                courseId,
+                assignmentId,
+                token,
+                submissionData
+            );
+
+            console.log('✅ Complete workflow finished successfully');
+            console.log('📊 Grading results:', gradingResults.grading_results.ai_score);
+
+            return {
+                pdf_submission: pdfSubmission,
+                grading_results: gradingResults.grading_results,
+                student_assignment: gradingResults.submission
+            };
+        } catch (error) {
+            console.error('❌ Error in integrated assignment workflow:', error);
             throw error;
         }
     }

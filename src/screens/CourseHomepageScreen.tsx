@@ -34,6 +34,7 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
     const [dashboard, setDashboard] = useState<StudentDashboard | null>(null);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [loadError, setLoadError] = useState<string | null>(null);
 
     // Load dashboard data
     const loadDashboard = async (isRefresh: boolean = false) => {
@@ -46,12 +47,19 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
 
             const dashboardData = await afterSchoolService.getStudentDashboard(token);
             setDashboard(dashboardData);
+            setLoadError(null);
         } catch (error) {
             console.error('Error loading dashboard:', error);
-            Alert.alert(
-                'Error',
-                'Failed to load your courses. Please try again.',
-                [{ text: 'OK' }]
+
+            // Check if it's a database connection error
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            const isDatabaseError = errorMessage.includes('Database connection error');
+
+            // Save a simplified error for UI fallback instead of spamming Alerts on focus
+            setLoadError(
+                isDatabaseError
+                    ? 'Unable to reach the server right now.'
+                    : 'Failed to load your dashboard.'
             );
         } finally {
             setLoading(false);
@@ -87,6 +95,25 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
         navigation.navigate('CourseProgress', { courseId, courseTitle });
     };
 
+    // Navigate directly to course assignments (New workflow)
+    const navigateToAssignments = (course: Course) => {
+        navigation.navigate('CourseAssignments', {
+            courseId: course.id,
+            courseTitle: course.title,
+            enableWorkflow: true
+        });
+    };
+
+    // Navigate to continue learning workflow
+    const continueWorkflow = (course: Course) => {
+        // This will take user to the next available assignment
+        navigation.navigate('CourseDetails', {
+            courseId: course.id,
+            courseTitle: course.title,
+            autoStartWorkflow: true
+        });
+    };
+
     // Get progress percentage for a course
     const getProgressPercentage = (courseId: number): number => {
         if (!dashboard?.progress_summary) return 0;
@@ -102,6 +129,21 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
         const hours = Math.floor(minutes / 60);
         const remainingMinutes = minutes % 60;
         return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+    };
+
+    // Get workflow status for a course (New for workflow)
+    const getWorkflowStatus = (courseId: number): {
+        hasAvailableAssignments: boolean;
+        nextAction: string;
+        canContinue: boolean;
+    } => {
+        // This would be enhanced to check actual assignments from the dashboard
+        // For now, return default workflow-ready state
+        return {
+            hasAvailableAssignments: true,
+            nextAction: 'Continue Learning',
+            canContinue: true
+        };
     };
 
     // Render loading state
@@ -178,18 +220,38 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
             >
                 <View style={styles.courseHeader}>
                     <View style={styles.courseInfo}>
-                        <Text style={styles.courseTitle} numberOfLines={2}>
-                            {course.title || 'Untitled Course'}
-                        </Text>
+                        <View style={styles.courseTitleRow}>
+                            <Text style={styles.courseTitle} numberOfLines={2}>
+                                {course.title || 'Untitled Course'}
+                            </Text>
+                            {course.generated_by_ai && (
+                                <View style={styles.aiBadge}>
+                                    <Text style={styles.aiBadgeText}>🤖 AI</Text>
+                                </View>
+                            )}
+                        </View>
                         <Text style={styles.courseSubject}>{course.subject || 'General'}</Text>
-                        <Text style={styles.courseDifficulty}>
-                            {course.difficulty_level ?
-                                course.difficulty_level.charAt(0).toUpperCase() + course.difficulty_level.slice(1) :
-                                'Beginner'
-                            }
-                        </Text>
+                        <View style={styles.courseMetaRow}>
+                            <Text style={styles.courseDifficulty}>
+                                {course.difficulty_level ?
+                                    course.difficulty_level.charAt(0).toUpperCase() + course.difficulty_level.slice(1) :
+                                    'Beginner'
+                                }
+                            </Text>
+                            <Text style={styles.courseDuration}>
+                                📅 {course.total_weeks || 8} weeks • {course.blocks_per_week || 2} blocks/week
+                            </Text>
+                        </View>
                     </View>
                     <View style={styles.courseActions}>
+                        {!isCompleted && (
+                            <TouchableOpacity
+                                style={styles.workflowButton}
+                                onPress={() => continueWorkflow(course)}
+                            >
+                                <Text style={styles.workflowButtonText}>Continue</Text>
+                            </TouchableOpacity>
+                        )}
                         <TouchableOpacity
                             style={styles.progressButton}
                             onPress={() => navigateToProgress(course.id, course.title)}
@@ -218,6 +280,15 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
                     <Text style={styles.courseDescription} numberOfLines={2}>
                         {course.description}
                     </Text>
+                )}
+
+                {/* Workflow Status Indicator */}
+                {!isCompleted && (
+                    <View style={styles.workflowIndicator}>
+                        <Text style={styles.workflowIndicatorText}>
+                            📋 Ready for assignments
+                        </Text>
+                    </View>
                 )}
 
                 {/* Status Badge */}
@@ -273,6 +344,23 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
 
     // Render courses section
     const renderCoursesSection = () => {
+        if (loadError && !dashboard) {
+            return (
+                <View style={styles.sectionContainer}>
+                    <Text style={styles.sectionTitle}>Your Courses</Text>
+                    <View style={styles.emptyStateContainer}>
+                        <Text style={styles.emptyStateText}>Dashboard Unavailable</Text>
+                        <Text style={styles.emptyStateSubtext}>{loadError}</Text>
+                        <TouchableOpacity
+                            style={styles.enrollButton}
+                            onPress={() => loadDashboard()}
+                        >
+                            <Text style={styles.enrollButtonText}>Retry</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            );
+        }
         if (!dashboard?.active_courses?.length) {
             return (
                 <View style={styles.sectionContainer}>
@@ -507,13 +595,58 @@ const styles = StyleSheet.create({
         color: '#007AFF',
         marginBottom: 2,
     },
+    courseTitleRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 4,
+    },
+    aiBadge: {
+        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        borderRadius: 4,
+        borderWidth: 1,
+        borderColor: 'rgba(16, 185, 129, 0.3)',
+        marginLeft: 8,
+    },
+    aiBadgeText: {
+        fontSize: 10,
+        color: '#10b981',
+        fontWeight: '600',
+    },
+    courseMetaRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginTop: 2,
+    },
     courseDifficulty: {
         fontSize: 12,
         color: '#666',
         textTransform: 'capitalize',
+        flex: 1,
+    },
+    courseDuration: {
+        fontSize: 11,
+        color: '#888',
+        textAlign: 'right',
+        flex: 1,
     },
     courseActions: {
         alignItems: 'flex-end',
+        gap: 6,
+    },
+    workflowButton: {
+        paddingHorizontal: 14,
+        paddingVertical: 8,
+        backgroundColor: '#007AFF',
+        borderRadius: 8,
+    },
+    workflowButtonText: {
+        fontSize: 12,
+        color: '#fff',
+        fontWeight: '600',
     },
     progressButton: {
         paddingHorizontal: 12,
@@ -556,6 +689,19 @@ const styles = StyleSheet.create({
         color: '#666',
         lineHeight: 18,
         marginBottom: 8,
+    },
+    workflowIndicator: {
+        backgroundColor: '#e8f5e8',
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 6,
+        marginBottom: 8,
+        alignSelf: 'flex-start',
+    },
+    workflowIndicatorText: {
+        fontSize: 11,
+        color: '#28a745',
+        fontWeight: '600',
     },
     statusContainer: {
         alignItems: 'flex-start',

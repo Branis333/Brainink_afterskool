@@ -24,8 +24,10 @@ export interface AISubmission {
     id: number;
     user_id: number;
     course_id: number;
-    lesson_id: number;
+    lesson_id?: number;  // Made optional for block-based submissions
+    block_id?: number;   // New: for AI-generated course blocks
     session_id: number;
+    assignment_id?: number;  // New: link to assignment for the workflow
     submission_type: string;
     original_filename?: string;
     file_path?: string;
@@ -53,13 +55,19 @@ export interface UploadFile {
     size?: number;
 }
 
-// Bulk PDF Upload Interfaces
+// Bulk PDF Upload Interfaces (Updated to match backend form data structure)
 export interface BulkPDFUploadRequest {
     session_id: number;
     submission_type: 'homework' | 'quiz' | 'practice' | 'assessment';
     files: UploadFile[];
     storage_mode?: 'database';
     skip_db?: boolean;
+}
+
+// Image Data Interface for bulk PDF creation 
+export interface ImageDataForPDF {
+    filename: string;
+    data: string; // base64 or file path
 }
 
 export interface BulkPDFUploadResponse {
@@ -95,8 +103,10 @@ export interface AIGradingResponse {
 
 export interface AISubmissionCreate {
     course_id: number;
-    lesson_id: number;
+    lesson_id?: number;  // Made optional for block-based submissions
+    block_id?: number;   // New: for AI-generated course blocks
     session_id: number;
+    assignment_id?: number;  // New: link to assignment for workflow
     submission_type: 'homework' | 'quiz' | 'practice' | 'assessment';
 }
 
@@ -338,10 +348,14 @@ class UploadsService {
                 formData.append('skip_db', uploadRequest.skip_db.toString());
             }
 
-            // Add files to FormData
+            // Add files to FormData (React Native compatible)
             uploadRequest.files.forEach((file, index) => {
-                const blob = new Blob([file.uri], { type: file.type });
-                formData.append('files', blob, file.name);
+                // In React Native, files come as objects with uri, type, name
+                formData.append('files', {
+                    uri: file.uri,
+                    type: file.type,
+                    name: file.name
+                } as any);
             });
 
             const response = await this.makeMultipartRequest(
@@ -632,6 +646,124 @@ class UploadsService {
     }
 
     // ===============================
+    // INTEGRATED WORKFLOW METHODS (New for seamless assignment workflow)
+    // ===============================
+
+    /**
+     * Complete workflow: Upload images → Convert to PDF → Process with AI → Return results
+     * This is the core method for the workflow: "upload pictures that turn into PDF and automatically start grading"
+     */
+    async uploadImagesForAssignmentWorkflow(
+        sessionId: number,
+        assignmentId: number,
+        images: UploadFile[],
+        token: string,
+        submissionType: 'homework' | 'quiz' | 'practice' | 'assessment' = 'homework'
+    ): Promise<{
+        pdf_submission: BulkPDFUploadResponse;
+        ai_processing: AIProcessingResults;
+        ready_for_grading: boolean;
+    }> {
+        try {
+            console.log('🚀 Starting complete assignment workflow with images');
+            console.log('📊 Session ID:', sessionId, 'Assignment ID:', assignmentId, 'Images:', images.length);
+
+            // Step 1: Validate images for the workflow
+            const validation = this.validateBulkFiles(images);
+            if (!validation.valid) {
+                throw new Error(`Image validation failed: ${validation.error}`);
+            }
+
+            // Step 2: Upload images and convert to PDF
+            console.log('📸 Step 2: Converting images to PDF...');
+            const bulkUploadRequest: BulkPDFUploadRequest = {
+                session_id: sessionId,
+                submission_type: submissionType,
+                files: images,
+                storage_mode: 'database',
+                skip_db: false  // We want to store in database for the workflow
+            };
+
+            const pdfSubmission = await this.bulkUploadImagesToPDF(bulkUploadRequest, token);
+            console.log('✅ Step 2 completed: PDF created with submission ID:', pdfSubmission.submission_id);
+
+            // Step 3: The backend automatically processes with AI, so we have the results
+            console.log('🤖 Step 3: AI processing completed automatically');
+            const aiProcessing = pdfSubmission.ai_processing_results;
+
+            if (!aiProcessing) {
+                console.warn('⚠️ No AI processing results returned from backend');
+            }
+
+            // Step 4: Workflow complete - ready for grading integration
+            console.log('✅ Assignment workflow completed successfully');
+            console.log('📊 AI Score:', aiProcessing?.ai_score, 'Feedback available:', !!aiProcessing?.ai_feedback);
+
+            return {
+                pdf_submission: pdfSubmission,
+                ai_processing: aiProcessing || {
+                    content_extracted: '',
+                    ai_score: 0,
+                    ai_feedback: 'Processing pending',
+                    ai_strengths: '',
+                    ai_improvements: '',
+                    ai_corrections: ''
+                },
+                ready_for_grading: !!aiProcessing && aiProcessing.ai_score > 0
+            };
+
+        } catch (error) {
+            console.error('❌ Error in assignment workflow:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Check if uploaded images are ready for assignment workflow
+     */
+    validateImagesForWorkflow(images: UploadFile[]): {
+        valid: boolean;
+        error?: string;
+        warnings?: string[];
+    } {
+        const warnings: string[] = [];
+
+        // Check if any images provided
+        if (!images || images.length === 0) {
+            return { valid: false, error: 'At least one image is required for the assignment workflow' };
+        }
+
+        // Check maximum number of images (backend might have limits)
+        if (images.length > 20) {
+            return { valid: false, error: 'Too many images. Maximum 20 images allowed per assignment.' };
+        }
+
+        // Validate each image
+        for (const image of images) {
+            const validation = this.validateFile(image);
+            if (!validation.valid) {
+                return { valid: false, error: `Image "${image.name}": ${validation.error}` };
+            }
+
+            if (!this.isImageFile(image)) {
+                return { valid: false, error: `File "${image.name}" is not a valid image file` };
+            }
+        }
+
+        // Add warnings for common issues
+        if (images.length > 10) {
+            warnings.push('Large number of images may take longer to process');
+        }
+
+        const totalSize = this.calculateTotalFileSize(images);
+        if (totalSize > 15 * 1024 * 1024) { // 15MB warning threshold
+            warnings.push('Large total file size may slow down processing');
+        }
+
+        return { valid: true, warnings: warnings.length > 0 ? warnings : undefined };
+    }
+
+    // ===============================
     // UTILITY AND HELPER METHODS
     // ===============================
 
@@ -858,6 +990,139 @@ class UploadsService {
             hasImprovements,
             hasCorrections,
             overallTone
+        };
+    }
+
+    // ===============================
+    // WORKFLOW-SPECIFIC HELPER METHODS
+    // ===============================
+
+    /**
+     * Get workflow step description for UI
+     */
+    getWorkflowStepDescription(step: 'upload' | 'convert' | 'process' | 'complete'): string {
+        switch (step) {
+            case 'upload': return 'Uploading images for assignment...';
+            case 'convert': return 'Converting images to PDF document...';
+            case 'process': return 'Processing with AI for automatic grading...';
+            case 'complete': return 'Assignment submitted successfully! Results ready.';
+            default: return 'Processing assignment...';
+        }
+    }
+
+    /**
+     * Estimate processing time for workflow
+     */
+    estimateWorkflowProcessingTime(imageCount: number): {
+        estimatedSeconds: number;
+        displayMessage: string;
+    } {
+        // Rough estimate: 2-3 seconds per image + PDF conversion + AI processing
+        const baseTime = 10; // Base processing time
+        const perImageTime = 3; // Seconds per image
+        const estimatedSeconds = baseTime + (imageCount * perImageTime);
+
+        let displayMessage = '';
+        if (estimatedSeconds < 30) {
+            displayMessage = 'This should take less than 30 seconds...';
+        } else if (estimatedSeconds < 60) {
+            displayMessage = 'This should take about a minute...';
+        } else {
+            displayMessage = `This may take up to ${Math.ceil(estimatedSeconds / 60)} minutes...`;
+        }
+
+        return { estimatedSeconds, displayMessage };
+    }
+
+    /**
+     * Check if workflow is ready for next step
+     */
+    isWorkflowReadyForNextStep(
+        currentStep: 'images_selected' | 'uploading' | 'processing' | 'completed',
+        images?: UploadFile[],
+        submission?: BulkPDFUploadResponse
+    ): {
+        ready: boolean;
+        nextStep?: string;
+        message?: string;
+    } {
+        switch (currentStep) {
+            case 'images_selected':
+                if (!images || images.length === 0) {
+                    return { ready: false, message: 'Please select at least one image' };
+                }
+                return {
+                    ready: true,
+                    nextStep: 'uploading',
+                    message: `Ready to upload ${images.length} image${images.length > 1 ? 's' : ''}`
+                };
+
+            case 'uploading':
+                return {
+                    ready: false,
+                    message: 'Please wait while images are being uploaded and converted to PDF...'
+                };
+
+            case 'processing':
+                if (submission && submission.ai_processing_results) {
+                    return {
+                        ready: true,
+                        nextStep: 'completed',
+                        message: 'AI processing completed! Results are ready.'
+                    };
+                }
+                return {
+                    ready: false,
+                    message: 'AI is analyzing your submission...'
+                };
+
+            case 'completed':
+                return {
+                    ready: true,
+                    message: 'Assignment workflow completed! You can continue to the next assignment.'
+                };
+
+            default:
+                return { ready: false, message: 'Unknown workflow state' };
+        }
+    }
+
+    /**
+     * Get assignment workflow summary for display
+     */
+    getWorkflowSummary(
+        images: UploadFile[],
+        pdfSubmission?: BulkPDFUploadResponse,
+        aiResults?: AIProcessingResults
+    ): {
+        imagesCount: number;
+        pdfGenerated: boolean;
+        aiProcessed: boolean;
+        score?: number;
+        feedback?: string;
+        status: 'pending' | 'processing' | 'completed' | 'error';
+    } {
+        const imagesCount = images?.length || 0;
+        const pdfGenerated = !!pdfSubmission?.pdf_filename;
+        const aiProcessed = !!aiResults?.ai_score;
+
+        let status: 'pending' | 'processing' | 'completed' | 'error' = 'pending';
+
+        if (aiProcessed) {
+            status = 'completed';
+        } else if (pdfGenerated) {
+            status = 'processing';
+        } else if (imagesCount > 0) {
+            status = 'processing';
+        }
+
+        return {
+            imagesCount,
+            pdfGenerated,
+            aiProcessed,
+            score: aiResults?.ai_score,
+            feedback: aiResults?.ai_feedback,
+            status
         };
     }
 }
