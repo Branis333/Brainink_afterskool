@@ -3,7 +3,7 @@
  * Shows comprehensive course information, lessons, progress, and actions
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
     View,
     Text,
@@ -29,6 +29,7 @@ import {
     UnifiedCourse,
     CourseAssignment
 } from '../../services/afterSchoolService';
+import { gradesService } from '../../services/gradesService';
 
 type NavigationProp = NativeStackNavigationProp<any>;
 type RouteProp_ = RouteProp<{ params: { courseId: number; courseTitle: string } }>;
@@ -55,11 +56,14 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
     const [enrolling, setEnrolling] = useState(false);
     const [isEnrolled, setIsEnrolled] = useState(false); // explicit enrollment UI flag
     const [activeTab, setActiveTab] = useState<'lessons' | 'progress' | 'assignments'>('lessons');
-    const [activeLessonSessions, setActiveLessonSessions] = useState<Record<number, number>>({}); // lessonId -> sessionId
-    const [activeBlockSessions, setActiveBlockSessions] = useState<Record<number, number>>({}); // blockId -> sessionId
+    const [activeLessonSessions, setActiveLessonSessions] = useState<Record<number, { id: number, status: string }>>({}); // lessonId -> {sessionId, status}
+    const [activeBlockSessions, setActiveBlockSessions] = useState<Record<number, { id: number, status: string }>>({}); // blockId -> {sessionId, status}
+    const [expandedWeeks, setExpandedWeeks] = useState<Record<number, boolean>>({}); // weekNumber -> isExpanded
+    const [selectedWeek, setSelectedWeek] = useState<number>(1); // For horizontal week selection
 
     // Load course data
     const inFlightRef = React.useRef<Promise<void> | null>(null);
+    const refreshTsRef = useRef<number | undefined>(undefined);
 
     const loadCourseData = async (isRefresh: boolean = false) => {
         try {
@@ -82,7 +86,15 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 ]);
 
                 setCourse(courseData);
-                setBlocks(Array.isArray(courseData.blocks) ? courseData.blocks : []);
+                const blocksArray = Array.isArray(courseData.blocks) ? courseData.blocks : [];
+                setBlocks(blocksArray);
+
+                // Initialize selectedWeek with the first week if not already set
+                if (blocksArray.length > 0 && !selectedWeek) {
+                    const firstWeek = Math.min(...blocksArray.map(b => b.week || 1));
+                    setSelectedWeek(firstWeek);
+                }
+
                 setProgress(progressData);
                 // Recalculate enrollment flag based on any progress or assignments already fetched later
                 setIsEnrolled(!!progressData);
@@ -165,6 +177,16 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         }, [courseId, token])
     );
 
+    // Force refresh if caller sets a new refreshTs param
+    useEffect(() => {
+        const ts = (route.params as any)?.refreshTs as number | undefined;
+        if (ts && ts !== refreshTsRef.current) {
+            refreshTsRef.current = ts;
+            loadCourseData(true);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [route.params]);
+
     // Load assignments when assignments tab is activated
     const onTabChange = (tab: 'lessons' | 'progress' | 'assignments') => {
         setActiveTab(tab);
@@ -179,34 +201,31 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         const targetCourse = courseData || course;
         if (!targetCourse) return;
         try {
-            const lessonMap: Record<number, number> = {};
-            const blockMap: Record<number, number> = {};
-            const lessons = (targetCourse.lessons || []).slice(0, 50);
-            const blocksData = (targetCourse.blocks || []).slice(0, 50);
-            const fetchOne = async (params: { lesson_id?: number; block_id?: number }) => {
-                const qp: string[] = [`course_id=${targetCourse.id}`, 'status=in_progress', 'limit=1'];
-                if (params.lesson_id) qp.push(`lesson_id=${params.lesson_id}`);
-                if (params.block_id) qp.push(`block_id=${params.block_id}`);
-                try {
-                    // Reuse service low-level fetcher if exposed; otherwise direct fetch
-                    const resp = await fetch(`${afterSchoolService ? ((afterSchoolService as any).baseUrl || 'https://brainink-backend.onrender.com') : 'https://brainink-backend.onrender.com'}/after-school/sessions/?${qp.join('&')}`, {
-                        headers: { 'Authorization': `Bearer ${token}` }
-                    });
-                    if (!resp.ok) return;
-                    const data = await resp.json();
-                    if (Array.isArray(data) && data.length > 0) {
-                        const s = data[0];
-                        if (params.lesson_id) lessonMap[params.lesson_id] = s.id;
-                        if (params.block_id) blockMap[params.block_id] = s.id;
+            const lessonMap: Record<number, { id: number, status: string }> = {};
+            const blockMap: Record<number, { id: number, status: string }> = {};
+
+            // Derive lesson completion from progress if available
+            if (progressData && Array.isArray(targetCourse.lessons)) {
+                const completedCount = Math.max(0, progressData.lessons_completed || 0);
+                const sortedLessons = [...targetCourse.lessons].sort((a, b) => a.order_index - b.order_index);
+                sortedLessons.forEach((lesson, idx) => {
+                    if (idx < completedCount) {
+                        lessonMap[lesson.id] = { id: lesson.id, status: 'completed' };
                     }
-                } catch (e) {
-                    // Silent per-item failure
-                }
-            };
-            await Promise.allSettled([
-                ...lessons.map(l => fetchOne({ lesson_id: l.id })),
-                ...blocksData.map(b => fetchOne({ block_id: b.id }))
-            ]);
+                });
+            }
+
+            // Derive block completion from blocks progress endpoint (grades service)
+            try {
+                const blocksProgress = await afterSchoolService.getCourseBlocksProgress(targetCourse.id, token);
+                const completedBlocks = (blocksProgress?.blocks || []).filter(b => b.is_completed);
+                completedBlocks.forEach(b => {
+                    blockMap[b.block_id] = { id: b.block_id, status: 'completed' };
+                });
+            } catch (e) {
+                // If blocks progress not available, skip silently
+            }
+
             setActiveLessonSessions(lessonMap);
             setActiveBlockSessions(blockMap);
         } catch (e) {
@@ -230,37 +249,24 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         });
     };
 
-    // Start study session
+    // Start study session (mark-done model: navigate without creating server session)
     const startStudySession = async (lesson: CourseLesson) => {
         try {
             if (!token) return;
-            if (activeLessonSessions[lesson.id]) {
-                navigation.navigate('StudySession', {
-                    sessionId: activeLessonSessions[lesson.id],
-                    courseId,
-                    lessonId: lesson.id,
-                    lessonTitle: lesson.title,
-                    courseTitle
-                });
-                return;
+            const localSessionId = activeLessonSessions[lesson.id]?.id || Math.floor(Math.random() * 1_000_000);
+            if (!activeLessonSessions[lesson.id]) {
+                setActiveLessonSessions(prev => ({ ...prev, [lesson.id]: { id: localSessionId, status: 'in_progress' } }));
             }
-            const session = await afterSchoolService.startStudySession({ course_id: courseId, lesson_id: lesson.id }, token);
-            setActiveLessonSessions(prev => ({ ...prev, [lesson.id]: session.id }));
-
             navigation.navigate('StudySession', {
-                sessionId: session.id,
+                sessionId: localSessionId,
                 courseId,
                 lessonId: lesson.id,
                 lessonTitle: lesson.title,
                 courseTitle
             });
         } catch (error) {
-            console.error('Error starting study session:', error);
-            Alert.alert(
-                'Error',
-                'Failed to start study session. Please try again.',
-                [{ text: 'OK' }]
-            );
+            console.error('Error navigating to study session:', error);
+            Alert.alert('Error', 'Failed to open study session. Please try again.', [{ text: 'OK' }]);
         }
     };
 
@@ -487,7 +493,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         const isAvailable = progress ? index <= progress.lessons_completed : index === 0;
 
         return (
-            <View key={lesson.id} style={[styles.lessonCard, !isAvailable && styles.lockedLessonCard]}>
+            <View style={[styles.lessonCard, !isAvailable && styles.lockedLessonCard]}>
                 <View style={styles.lessonHeader}>
                     <View style={styles.lessonInfo}>
                         <Text style={styles.lessonOrder}>Lesson {lesson.order_index}</Text>
@@ -529,7 +535,13 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                             style={styles.startStudyButton}
                             onPress={() => startStudySession(lesson)}
                         >
-                            <Text style={styles.startStudyButtonText}>Start Study</Text>
+                            <Text style={styles.startStudyButtonText}>
+                                {activeLessonSessions[lesson.id]
+                                    ? activeLessonSessions[lesson.id].status === 'completed'
+                                        ? 'Review Session'
+                                        : 'Continue Session'
+                                    : 'Start Study'}
+                            </Text>
                         </TouchableOpacity>
                     </View>
                 )}
@@ -538,6 +550,30 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
     };
 
     // Render lessons tab content
+    // Toggle week expansion
+    const toggleWeek = (weekNumber: number) => {
+        setExpandedWeeks(prev => ({
+            ...prev,
+            [weekNumber]: !prev[weekNumber]
+        }));
+    };
+
+    // Group blocks by week
+    const getBlocksByWeek = () => {
+        const blocksByWeek: Record<number, CourseBlock[]> = {};
+        blocks.forEach(block => {
+            if (!blocksByWeek[block.week]) {
+                blocksByWeek[block.week] = [];
+            }
+            blocksByWeek[block.week].push(block);
+        });
+        // Sort blocks within each week
+        Object.keys(blocksByWeek).forEach(week => {
+            blocksByWeek[Number(week)].sort((a, b) => a.block_number - b.block_number);
+        });
+        return blocksByWeek;
+    };
+
     const renderLessonsContent = () => {
         // If lessons exist, show them
         if (hasLessons) {
@@ -545,18 +581,79 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 <View style={styles.contentContainer}>
                     {course.lessons
                         .sort((a, b) => a.order_index - b.order_index)
-                        .map((lesson, index) => renderLessonCard(lesson, index))}
+                        .map((lesson, index) => (
+                            <View key={`lesson-${lesson.id}`}>
+                                {renderLessonCard(lesson, index)}
+                            </View>
+                        ))}
                 </View>
             );
         }
 
-        // Fallback: show blocks if no lessons
+        // Fallback: show blocks organized by weeks with horizontal scrolling
         if (hasBlocks) {
+            const blocksByWeek = getBlocksByWeek();
+            const weeks = Object.keys(blocksByWeek).map(Number).sort((a, b) => a - b);
+            const currentSelectedWeek = selectedWeek || weeks[0] || 1;
+            const selectedWeekBlocks = blocksByWeek[currentSelectedWeek] || [];
+
             return (
                 <View style={styles.contentContainer}>
-                    {blocks
-                        .sort((a, b) => (a.week - b.week) || (a.block_number - b.block_number))
-                        .map((block, idx) => renderBlockCard(block, idx))}
+                    {/* Horizontal Week Selector */}
+                    <View style={styles.horizontalWeekContainer}>
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.weekScrollContent}
+                        >
+                            {weeks.map(weekNumber => {
+                                const weekBlocks = blocksByWeek[weekNumber];
+                                const completedBlocks = weekBlocks.filter(b =>
+                                    activeBlockSessions[b.id]?.status === 'completed'
+                                ).length;
+                                const totalBlocks = weekBlocks.length;
+                                const isSelected = currentSelectedWeek === weekNumber;
+                                const progressPercent = totalBlocks > 0 ? (completedBlocks / totalBlocks) * 100 : 0;
+
+                                return (
+                                    <TouchableOpacity
+                                        key={`week-${weekNumber}`}
+                                        style={[
+                                            styles.weekPill,
+                                            isSelected && styles.weekPillSelected
+                                        ]}
+                                        onPress={() => setSelectedWeek(weekNumber)}
+                                    >
+                                        <View style={styles.weekPillContent}>
+                                            <View style={[
+                                                styles.weekProgressIndicator,
+                                                {
+                                                    backgroundColor: progressPercent === 0 ? '#E0E0E0' :
+                                                        progressPercent < 50 ? '#666' :
+                                                            progressPercent === 100 ? '#000' : '#666'
+                                                }
+                                            ]} />
+                                            <Text style={[
+                                                styles.weekPillText,
+                                                isSelected && styles.weekPillTextSelected
+                                            ]}>
+                                                week {weekNumber}
+                                            </Text>
+                                        </View>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </ScrollView>
+                    </View>
+
+                    {/* Selected Week's Blocks */}
+                    <View style={styles.weekBlocksContainer}>
+                        {selectedWeekBlocks.map((block, idx) => (
+                            <View key={`block-${block.id}`}>
+                                {renderBlockCard(block, idx)}
+                            </View>
+                        ))}
+                    </View>
                 </View>
             );
         }
@@ -574,7 +671,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
             if (!token) return;
             if (activeBlockSessions[block.id]) {
                 navigation.navigate('StudySession', {
-                    sessionId: activeBlockSessions[block.id],
+                    sessionId: activeBlockSessions[block.id].id,
                     courseId,
                     blockId: block.id,
                     blockTitle: block.title,
@@ -582,24 +679,26 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 });
                 return;
             }
-            const session = await afterSchoolService.startStudySession({ course_id: courseId, block_id: block.id }, token);
-            setActiveBlockSessions(prev => ({ ...prev, [block.id]: session.id }));
+            const localSessionId = activeBlockSessions[block.id]?.id || Math.floor(Math.random() * 1_000_000);
+            if (!activeBlockSessions[block.id]) {
+                setActiveBlockSessions(prev => ({ ...prev, [block.id]: { id: localSessionId, status: 'in_progress' } }));
+            }
             navigation.navigate('StudySession', {
-                sessionId: session.id,
+                sessionId: localSessionId,
                 courseId,
                 blockId: block.id,
                 blockTitle: block.title,
                 courseTitle
             });
         } catch (error) {
-            console.error('Error starting block study session:', error);
-            Alert.alert('Error', 'Failed to start block study session.');
+            console.error('Error opening block study session:', error);
+            Alert.alert('Error', 'Failed to open block study session.');
         }
     };
 
     const renderBlockCard = (block: CourseBlock, index: number) => {
         return (
-            <View key={block.id} style={styles.lessonCard}>
+            <View style={styles.lessonCard}>
                 <View style={styles.lessonHeader}>
                     <View style={styles.lessonInfo}>
                         <Text style={styles.lessonOrder}>Week {block.week} • Block {block.block_number}</Text>
@@ -614,11 +713,18 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 </View>
                 <View style={styles.lessonButtonContainer}>
                     <TouchableOpacity
-                        style={styles.startStudyButton}
+                        style={[
+                            styles.startStudyButton,
+                            activeBlockSessions[block.id]?.status === 'completed' && { backgroundColor: '#10B981' }
+                        ]}
                         onPress={() => startBlockSession(block)}
                     >
                         <Text style={styles.startStudyButtonText}>
-                            {activeBlockSessions[block.id] ? 'Continue Study' : 'Start Study'}
+                            {activeBlockSessions[block.id]?.status === 'completed'
+                                ? 'Review Block'
+                                : activeBlockSessions[block.id]
+                                    ? 'Continue Study'
+                                    : 'Start Study'}
                         </Text>
                     </TouchableOpacity>
                 </View>
@@ -652,13 +758,13 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                         </View>
                         <View style={styles.progressDetailItem}>
                             <Text style={styles.progressDetailValue}>
-                                {new Date(progress.started_at).toLocaleDateString()}
+                                {gradesService.formatRelativeTime(progress.started_at)}
                             </Text>
                             <Text style={styles.progressDetailLabel}>Started</Text>
                         </View>
                         <View style={styles.progressDetailItem}>
                             <Text style={styles.progressDetailValue}>
-                                {new Date(progress.last_activity).toLocaleDateString()}
+                                {gradesService.formatRelativeTime(progress.last_activity)}
                             </Text>
                             <Text style={styles.progressDetailLabel}>Last Activity</Text>
                         </View>
@@ -689,7 +795,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         const canStartWorkflow = assignment.status === 'assigned';
 
         return (
-            <View key={assignment.id} style={styles.assignmentWorkflowCard}>
+            <View style={styles.assignmentWorkflowCard}>
                 <View style={styles.assignmentHeader}>
                     <View style={styles.assignmentInfo}>
                         <Text style={styles.assignmentWorkflowTitle}>{assignment.assignment.title}</Text>
@@ -806,14 +912,28 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 {hasStudent && (
                     <View style={{ marginBottom: 16 }}>
                         <Text style={styles.sectionHeading}>Your Assigned Work ({assignments.length})</Text>
-                        {assignments.map(renderAssignmentCard)}
+                        {assignments.map((a, idx) => {
+                            const safeKey = a?.id ?? a?.assignment_id ?? a?.assignment?.id ?? `idx-${idx}`;
+                            return (
+                                <View key={`student-assignment-${safeKey}`}>
+                                    {renderAssignmentCard(a)}
+                                </View>
+                            );
+                        })}
                     </View>
                 )}
                 {hasDefinitions && (
                     <View style={{ marginBottom: 8 }}>
                         <Text style={styles.sectionHeading}>Available Assignments ({availableDefinitionAdapters.length})</Text>
                         {availableDefinitionAdapters.length > 0 ? (
-                            availableDefinitionAdapters.map(renderAssignmentCard)
+                            availableDefinitionAdapters.map((a, idx) => {
+                                const safeKey = a?.id ?? a?.assignment_id ?? a?.assignment?.id ?? `idx-${idx}`;
+                                return (
+                                    <View key={`available-assignment-${safeKey}`}>
+                                        {renderAssignmentCard(a)}
+                                    </View>
+                                );
+                            })
                         ) : (
                             <Text style={{ fontSize: 13, color: '#666', marginTop: 4 }}>
                                 All available assignments have already been assigned to you.
@@ -1077,6 +1197,124 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: '#999',
         textAlign: 'center',
+    },
+    // Week organization styles
+    weekSection: {
+        backgroundColor: '#fff',
+        borderRadius: 12,
+        marginBottom: 16,
+        overflow: 'hidden',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 2,
+    },
+    weekHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: 16,
+        backgroundColor: '#f8f9fa',
+        borderBottomWidth: 1,
+        borderBottomColor: '#e0e0e0',
+    },
+    weekHeaderLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        flex: 1,
+    },
+    weekIconContainer: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: '#fff',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 12,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1,
+        shadowRadius: 2,
+        elevation: 1,
+    },
+    weekIcon: {
+        fontSize: 20,
+    },
+    weekTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#1a1a1a',
+        marginBottom: 2,
+    },
+    weekSubtitle: {
+        fontSize: 13,
+        color: '#666',
+    },
+    weekHeaderRight: {
+        paddingLeft: 12,
+    },
+    expandIcon: {
+        fontSize: 16,
+        color: '#666',
+    },
+    weekContent: {
+        padding: 12,
+        paddingTop: 8,
+    },
+    // Horizontal week selector styles
+    horizontalWeekContainer: {
+        backgroundColor: '#fff',
+        paddingVertical: 12,
+        paddingHorizontal: 12,
+        marginBottom: 16,
+        borderRadius: 12,
+        marginHorizontal: 12,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 2,
+        elevation: 1,
+    },
+    weekScrollContent: {
+        paddingHorizontal: 4,
+        gap: 8,
+    },
+    weekPill: {
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        borderRadius: 20,
+        backgroundColor: '#f0f0f0',
+        borderWidth: 1.5,
+        borderColor: '#e0e0e0',
+        marginHorizontal: 4,
+        minWidth: 85,
+        alignItems: 'center',
+    },
+    weekPillSelected: {
+        backgroundColor: '#007AFF',
+        borderColor: '#007AFF',
+    },
+    weekPillContent: {
+        alignItems: 'center',
+        gap: 4,
+    },
+    weekProgressIndicator: {
+        width: 14,
+        height: 14,
+        borderRadius: 7,
+        marginBottom: 2,
+    },
+    weekPillText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#333',
+    },
+    weekPillTextSelected: {
+        color: '#fff',
+    },
+    weekBlocksContainer: {
+        paddingHorizontal: 16,
     },
     lessonCard: {
         backgroundColor: '#fff',

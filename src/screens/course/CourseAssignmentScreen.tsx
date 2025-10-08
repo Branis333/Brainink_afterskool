@@ -20,15 +20,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../../context/AuthContext';
+import * as ImagePicker from 'expo-image-picker';
 import {
     afterSchoolService,
     AISubmission,
     AISubmissionCreate,
     CourseWithLessons,
     StudentAssignment,
-    CourseAssignment
+    CourseAssignment,
+    AssignmentStatus,
+    AssignmentGradeResult
 } from '../../services/afterSchoolService';
-import { uploadsService } from '../../services/uploadsService';
+import { uploadsService, UploadFile, AIProcessingResults } from '../../services/uploadsService';
+import { gradesService } from '../../services/gradesService';
 
 type NavigationProp = NativeStackNavigationProp<any>;
 type RouteProp_ = RouteProp<{
@@ -52,7 +56,10 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
 
     const [course, setCourse] = useState<CourseWithLessons | null>(null);
     const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
+    // Raw assignment definitions (course-level, not user-specific)
+    const [rawAssignments, setRawAssignments] = useState<CourseAssignment[]>([]);
     const [currentAssignment, setCurrentAssignment] = useState<StudentAssignment | null>(null);
+    const [assignmentStatus, setAssignmentStatus] = useState<AssignmentStatus | null>(null);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'submitted'>('all');
@@ -60,10 +67,54 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
     // Workflow states
     const [workflowActive, setWorkflowActive] = useState(false);
     const [workflowStep, setWorkflowStep] = useState<'instructions' | 'upload' | 'processing' | 'results'>('instructions');
-    const [selectedImages, setSelectedImages] = useState<string[]>([]);
+    const [selectedImages, setSelectedImages] = useState<UploadFile[]>([]);
     const [uploadProgress, setUploadProgress] = useState(0);
     const [grading, setGrading] = useState(false);
     const [results, setResults] = useState<AISubmission | null>(null);
+    // Remember block/lesson context for backend requirements
+    const [contextLessonId, setContextLessonId] = useState<number | undefined>(undefined);
+    const [contextBlockId, setContextBlockId] = useState<number | undefined>(undefined);
+    // Toggle to reveal technical feedback details when there's an issue
+    const [showTechDetails, setShowTechDetails] = useState(false);
+
+    // Sanitize raw AI feedback to avoid leaking provider/system errors to users (mirrors GradeDetails)
+    const cleanAIText = useCallback((text?: string | null): string | null => {
+        if (!text || typeof text !== 'string') return text ?? null;
+        let t = text.trim();
+        // Remove known provider artifacts and overly-technical messages
+        const patterns: Array<RegExp | string> = [
+            /(?<=^|\n).*finish_reason\s*=\s*\d+.*$/gim,
+            /(?<=^|\n).*response\.text.*quick accessor.*$/gim,
+            /(?<=^|\n).*(safety system|content filter).*blocked.*$/gim,
+            /(?<=^|\n).*policy.*violation.*$/gim,
+            /(?<=^|\n).*model.*overloaded.*try again.*$/gim
+        ];
+        patterns.forEach(p => {
+            t = t.replace(p as any, '').trim();
+        });
+        // Collapse excessive whitespace
+        t = t.replace(/\n{3,}/g, '\n\n').trim();
+        // Provide a friendly fallback when text becomes empty
+        if (t.length === 0) {
+            return 'Feedback is not available yet. Please try again shortly.';
+        }
+        return t;
+    }, []);
+
+    // Identify when feedback suggests a processing issue rather than real grading
+    const isProcessingIssue = useCallback((text?: string | null): boolean => {
+        if (!text || typeof text !== 'string') return false;
+        const t = text.toLowerCase();
+        return (
+            t.includes('error') ||
+            t.includes('issue') ||
+            t.includes('invalid') ||
+            t.includes('pending') ||
+            t.includes('failed to process') ||
+            t.includes('try again') ||
+            t.includes('overloaded')
+        );
+    }, []);
 
     // Initialize workflow if requested
     useEffect(() => {
@@ -82,20 +133,26 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                 throw new Error('No authentication token available');
             }
 
-            // Load course assignments
-            const [courseData, assignmentsData] = await Promise.all([
+            // Load course assignments (student-specific) and raw assignment definitions (course-level)
+            const [courseData, assignmentsData, definitions] = await Promise.all([
                 afterSchoolService.getCourseDetails(courseId, token),
-                afterSchoolService.getCourseAssignments(courseId, token)
+                afterSchoolService.getCourseAssignments(courseId, token),
+                afterSchoolService.getCourseAssignmentDefinitions(courseId, token).catch(() => [])
             ]);
 
             setCourse(courseData);
             setAssignments(assignmentsData);
+            setRawAssignments(definitions);
 
             // If a specific assignment is requested, only proceed if the student actually has it
             if (assignmentId) {
                 const assignment = assignmentsData.find(a => a.assignment_id === assignmentId);
                 if (assignment) {
                     setCurrentAssignment(assignment);
+
+                    // Load assignment status for the current assignment (mark-done model)
+                    const status = await afterSchoolService.getAssignmentStatus(assignmentId.toString(), token);
+                    setAssignmentStatus(status); // Will be null if not found, which is handled gracefully
                 } // else: silently ignore; user will see list without disruptive alert
             }
 
@@ -125,17 +182,37 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
         loadAssignmentData(true);
     }, []);
 
-    // Filter assignments based on active tab
-    const getFilteredAssignments = () => {
-        switch (activeTab) {
-            case 'pending':
-                return assignments.filter(a => a.status === 'assigned');
-            case 'submitted':
-                return assignments.filter(a => a.status === 'submitted' || a.status === 'graded');
-            default:
-                return assignments;
-        }
-    };
+    // Build a set of assigned definition ids to prevent duplicates in Available section
+    const assignedDefinitionIds = new Set(
+        assignments
+            .map(a => (a.assignment?.id ?? a.assignment_id))
+            .filter(id => typeof id === 'number')
+    );
+
+    // Adapter to render course-level definitions using the same card component without pretending they are student-owned
+    const adaptDefinition = (definition: CourseAssignment): StudentAssignment => ({
+        id: definition.id,
+        user_id: -1,
+        assignment_id: definition.id,
+        course_id: definition.course_id,
+        assigned_at: definition.created_at,
+        due_date: definition.due_days_after_assignment
+            ? new Date(Date.now() + definition.due_days_after_assignment * 86400000).toISOString()
+            : definition.created_at,
+        status: 'assigned',
+        created_at: definition.created_at,
+        updated_at: definition.updated_at,
+        assignment: definition
+    });
+
+    const availableDefinitionAdapters: StudentAssignment[] = (rawAssignments || [])
+        .filter(def => !assignedDefinitionIds.has(def.id))
+        .map(adaptDefinition);
+
+    // Tab counts and filtering
+    const pendingAssigned = assignments.filter(a => a.status === 'assigned');
+    const submittedOrGraded = assignments.filter(a => a.status === 'submitted' || a.status === 'graded');
+    const allCount = assignments.length + availableDefinitionAdapters.length;
 
     // Start assignment workflow
     const startAssignmentWorkflow = (assignment?: StudentAssignment) => {
@@ -147,6 +224,45 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
         setWorkflowStep('instructions');
         setSelectedImages([]);
         setResults(null);
+        setContextLessonId(undefined);
+        setContextBlockId(undefined);
+    };
+
+    // Retry assignment
+    const retryAssignment = async () => {
+        if (!currentAssignment || !token) return;
+
+        try {
+            setGrading(true);
+
+            const result = await afterSchoolService.retryAssignment(currentAssignment.assignment_id.toString(), token);
+
+            Alert.alert(
+                'Assignment Reset',
+                `Assignment retry initiated. You have ${result.grade_response.attempts_remaining} attempts remaining.`,
+                [
+                    {
+                        text: 'Start Retry',
+                        onPress: () => {
+                            // Refresh assignment status and start workflow
+                            loadAssignmentData();
+                            startAssignmentWorkflow();
+                        }
+                    },
+                    { text: 'Later', style: 'cancel' }
+                ]
+            );
+
+        } catch (error) {
+            console.error('Error retrying assignment:', error);
+            Alert.alert(
+                'Error',
+                'Failed to retry assignment. Please try again.',
+                [{ text: 'OK' }]
+            );
+        } finally {
+            setGrading(false);
+        }
     };
 
     // Navigate to next workflow step
@@ -163,107 +279,187 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
         }
     };
 
-    // Handle image selection (placeholder - would integrate with image picker)
+    // Handle image selection with expo-image-picker (camera or library)
     const selectImages = async () => {
-        // This would use react-native-image-picker or similar
-        // For now, simulating image selection
-        Alert.alert(
-            'Image Upload',
-            'In a real app, this would open the camera or photo library',
-            [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Simulate Upload', onPress: () => simulateImageUpload() }
-            ]
-        );
+        try {
+            // Ask user to choose source
+            Alert.alert(
+                'Add Photos',
+                'Choose where to pick images from',
+                [
+                    {
+                        text: 'Camera',
+                        onPress: async () => {
+                            const { status } = await ImagePicker.requestCameraPermissionsAsync();
+                            if (status !== 'granted') {
+                                Alert.alert('Permission required', 'Camera permission is needed to take photos.');
+                                return;
+                            }
+                            const result = await ImagePicker.launchCameraAsync({
+                                quality: 0.8,
+                                base64: false,
+                            });
+                            if (!result.canceled && result.assets?.length) {
+                                const newFiles = result.assets.map((asset, idx): UploadFile => ({
+                                    uri: asset.uri,
+                                    name: (asset as any).fileName || asset.uri.split('/').pop() || `photo_${Date.now()}_${idx}.jpg`,
+                                    type: asset.mimeType || 'image/jpeg',
+                                }));
+                                setSelectedImages(prev => [...prev, ...newFiles]);
+                            }
+                        }
+                    },
+                    {
+                        text: 'Photo Library',
+                        onPress: async () => {
+                            const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                            if (status !== 'granted') {
+                                Alert.alert('Permission required', 'Photo library permission is needed to select images.');
+                                return;
+                            }
+                            const result = await ImagePicker.launchImageLibraryAsync({
+                                allowsMultipleSelection: true,
+                                quality: 0.8,
+                                base64: false,
+                            });
+                            if (!result.canceled && result.assets?.length) {
+                                const newFiles = result.assets.map((asset, idx): UploadFile => ({
+                                    uri: asset.uri,
+                                    name: (asset as any).fileName || asset.uri.split('/').pop() || `image_${Date.now()}_${idx}.jpg`,
+                                    type: asset.mimeType || 'image/jpeg',
+                                }));
+                                setSelectedImages(prev => [...prev, ...newFiles]);
+                            }
+                        }
+                    },
+                    { text: 'Cancel', style: 'cancel' }
+                ]
+            );
+        } catch (err) {
+            console.error('Image selection error:', err);
+            Alert.alert('Error', 'Failed to select images');
+        }
     };
 
-    // Simulate image upload for demo
-    const simulateImageUpload = () => {
-        setSelectedImages(['image1.jpg', 'image2.jpg']);
-    };
-
-    // Start image upload and processing workflow
+    // Start image upload and processing workflow (real backend integration)
     const startImageUpload = async () => {
         if (!currentAssignment || !token || selectedImages.length === 0) return;
 
         try {
             setWorkflowStep('processing');
-            setUploadProgress(0);
-
-            // Simulate upload progress
-            const progressInterval = setInterval(() => {
-                setUploadProgress(prev => {
-                    if (prev >= 100) {
-                        clearInterval(progressInterval);
-                        processSubmission();
-                        return 100;
-                    }
-                    return prev + 10;
-                });
-            }, 200);
-
-        } catch (error) {
-            console.error('Error uploading images:', error);
-            Alert.alert('Error', 'Failed to upload images. Please try again.');
-            setWorkflowStep('upload');
-        }
-    };
-
-    // Process submission and get AI grading
-    const processSubmission = async () => {
-        if (!currentAssignment || !token) return;
-
-        try {
+            setUploadProgress(10);
             setGrading(true);
+
+            // Determine appropriate block or lesson context for uploads
+            const assignmentBlockId = (currentAssignment.assignment?.block_id ?? (currentAssignment as any)?.block_id) as number | undefined;
+            const assignmentLessonId = (currentAssignment.assignment as any)?.lesson_id as number | undefined;
+            let lessonIdToUse: number | undefined = assignmentLessonId;
+            let blockIdToUse: number | undefined = assignmentBlockId;
+
+            console.log('🧭 Block/Lesson resolution:', {
+                assignmentBlockId,
+                assignmentLessonId,
+                hasCourseLessons: Array.isArray((course as any)?.lessons) && (course as any)?.lessons?.length > 0
+            });
+
+            // Prefer assignment's block_id if present
+            if (!blockIdToUse && !lessonIdToUse) {
+                // Fall back to first available lesson from course details
+                const firstLesson = (course as any)?.lessons?.[0];
+                if (firstLesson?.id) {
+                    lessonIdToUse = firstLesson.id;
+                } else {
+                    // As a final fallback, try fetching blocks and use the first one
+                    try {
+                        const withBlocks = await afterSchoolService.getCourseWithBlocks(courseId, token);
+                        if (withBlocks?.blocks?.length) {
+                            blockIdToUse = withBlocks.blocks[0].id;
+                        }
+                    } catch (e) {
+                        console.warn('Could not fetch course blocks for fallback:', e);
+                    }
+                }
+            }
+
+            // If we found a block but no lesson and the course has lessons, include the first lesson to satisfy backend constraints
+            if (blockIdToUse && !lessonIdToUse) {
+                const firstCourseLesson = (course as any)?.lessons?.[0];
+                if (firstCourseLesson?.id) {
+                    lessonIdToUse = firstCourseLesson.id;
+                }
+            }
+
+            if (!lessonIdToUse && !blockIdToUse) {
+                throw new Error('Cannot upload assignment: no lesson or block context found for this assignment.');
+            }
+
+            // Store context for upload workflow
+            setContextLessonId(lessonIdToUse);
+            setContextBlockId(blockIdToUse);
+            console.log('✅ Ready for upload with context:', { courseId, lessonId: lessonIdToUse, blockId: blockIdToUse });
 
             // Map assignment type for API compatibility
             const assignmentType = currentAssignment.assignment?.assignment_type === 'project'
                 ? 'assessment'
-                : currentAssignment.assignment?.assignment_type || 'homework';
+                : (currentAssignment.assignment?.assignment_type as any) || 'homework';
 
-            // In real implementation, would call the workflow service
-            const submissionResult = await afterSchoolService.submitAssignmentWithImages(
+            // Validate images before upload
+            const validation = uploadsService.validateImagesForWorkflow(selectedImages);
+            if (!validation.valid) {
+                throw new Error(validation.error || 'Invalid images selected');
+            }
+
+            // Upload images → PDF → AI processing
+            setUploadProgress(40);
+            const workflow = await uploadsService.uploadImagesForAssignmentWorkflow(
                 courseId,
                 currentAssignment.assignment_id,
-                1, // sessionId - would be from current session
-                selectedImages, // Would be actual files
+                selectedImages,
                 token,
-                assignmentType as 'homework' | 'quiz' | 'assessment' | 'practice'
+                assignmentType,
+                { lesson_id: lessonIdToUse, block_id: blockIdToUse }
             );
 
-            // Extract results from the grading response
-            const gradingResults = submissionResult.grading_results;
+            setUploadProgress(80);
+
+            // Use AI results from workflow
+            const ai: AIProcessingResults | undefined = workflow.ai_processing;
+            // Preserve undefined when score isn't available to avoid showing 0% incorrectly
+            const aiScore = typeof ai?.ai_score === 'number' ? ai.ai_score : undefined;
+            const aiFeedback = ai?.ai_feedback ?? '';
+            const hasIssue = isProcessingIssue(aiFeedback);
+
             setResults({
-                id: 0,
+                id: workflow.pdf_submission.submission_id || 0,
                 user_id: 0,
                 course_id: courseId,
-                lesson_id: 0,
-                session_id: 1,
+                lesson_id: lessonIdToUse,
+                block_id: blockIdToUse,
                 submission_type: assignmentType,
                 ai_processed: true,
-                ai_score: gradingResults.ai_score || 0,
-                ai_feedback: gradingResults.ai_feedback || '',
+                ai_score: aiScore as any,
+                ai_feedback: aiFeedback,
                 requires_review: false,
                 submitted_at: new Date().toISOString(),
                 processed_at: new Date().toISOString()
-            });
+            } as any);
 
+            // Reflect results in UI
             setWorkflowStep('results');
-
-            // Update assignment status
             setCurrentAssignment(prev => prev ? {
                 ...prev,
-                status: 'graded',
-                grade: gradingResults.ai_score || 0,
-                feedback: gradingResults.ai_feedback || ''
+                status: (aiScore != null && !hasIssue) ? 'graded' : 'submitted',
+                grade: (aiScore != null && !hasIssue) ? aiScore : undefined,
+                feedback: aiFeedback
             } : null);
 
         } catch (error) {
-            console.error('Error processing submission:', error);
-            Alert.alert('Error', 'Failed to process submission. Please try again.');
+            console.error('Error uploading/processing images:', error);
+            Alert.alert('Error', error instanceof Error ? error.message : 'Failed to upload images. Please try again.');
             setWorkflowStep('upload');
         } finally {
             setGrading(false);
+            setUploadProgress(100);
         }
     };
 
@@ -274,6 +470,8 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
         setSelectedImages([]);
         setUploadProgress(0);
         setResults(null);
+        setContextLessonId(undefined);
+        setContextBlockId(undefined);
 
         // Refresh assignments to show updated status
         loadAssignmentData(true);
@@ -290,8 +488,60 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
         }
     };
 
+    // Convert backend status to frontend status for compatibility
+    const mapBackendStatusToFrontend = (backendStatus: string, grade: number, canRetry: boolean) => {
+        switch (backendStatus) {
+            case 'passed':
+                return 'passed';
+            case 'needs_retry':
+                return canRetry ? 'failed_can_retry' : 'failed_no_retry';
+            case 'failed':
+                return 'failed_no_retry';
+            case 'submitted':
+            case 'graded':
+                // Check if passed based on grade
+                return grade >= 80 ? 'passed' : (canRetry ? 'failed_can_retry' : 'failed_no_retry');
+            case 'assigned':
+                return 'not_attempted';
+            default:
+                return 'not_attempted';
+        }
+    };
+
     // Get assignment status display
     const getAssignmentStatusDisplay = (assignment: StudentAssignment) => {
+        // Use new assignment status if available
+        if (assignmentStatus && assignment.assignment_id.toString() === assignmentStatus.assignment.id.toString()) {
+            const mappedStatus = mapBackendStatusToFrontend(
+                assignmentStatus.student_assignment.status,
+                assignmentStatus.student_assignment.grade,
+                assignmentStatus.attempts_info.can_retry
+            );
+            const grade = assignmentStatus.student_assignment.grade;
+
+            switch (mappedStatus) {
+                case 'passed':
+                    return { text: `✓ Passed (${grade}%)`, color: '#28A745', bgColor: '#E8F5E8' };
+                case 'failed_can_retry':
+                    return {
+                        text: `Try Again (${grade}% - Need 80%)`,
+                        color: '#856404',
+                        bgColor: '#FFF3E0'
+                    };
+                case 'failed_no_retry':
+                    return {
+                        text: `Failed (${grade}% - Max attempts reached)`,
+                        color: '#dc3545',
+                        bgColor: '#FFEBEE'
+                    };
+                case 'not_attempted':
+                    return { text: 'Ready to Start', color: '#007AFF', bgColor: '#E3F2FD' };
+                default:
+                    return { text: 'Unknown Status', color: '#666', bgColor: '#F5F5F5' };
+            }
+        }
+
+        // Fallback to legacy status
         switch (assignment.status) {
             case 'assigned':
                 return { text: 'Ready to Start', color: '#007AFF', bgColor: '#E3F2FD' };
@@ -355,7 +605,7 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                 onPress={() => setActiveTab('all')}
             >
                 <Text style={[styles.tabText, activeTab === 'all' && styles.activeTabText]}>
-                    All ({assignments.length})
+                    All ({allCount})
                 </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -363,7 +613,7 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                 onPress={() => setActiveTab('pending')}
             >
                 <Text style={[styles.tabText, activeTab === 'pending' && styles.activeTabText]}>
-                    Pending ({assignments.filter(a => a.status === 'assigned').length})
+                    Pending ({pendingAssigned.length})
                 </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -371,7 +621,7 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                 onPress={() => setActiveTab('submitted')}
             >
                 <Text style={[styles.tabText, activeTab === 'submitted' && styles.activeTabText]}>
-                    Completed ({assignments.filter(a => a.status === 'submitted' || a.status === 'graded').length})
+                    Completed ({submittedOrGraded.length})
                 </Text>
             </TouchableOpacity>
         </View>
@@ -397,17 +647,30 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
 
                         <View style={styles.workflowContent}>
                             <Text style={styles.workflowStepTitle}>📋 Assignment Instructions</Text>
-                            <Text style={styles.instructionsText}>
-                                {currentAssignment.assignment?.description}
-                            </Text>
+
+                            {currentAssignment.assignment?.description && (
+                                <View style={styles.descriptionBlock}>
+                                    <Text style={styles.instructionsText}>
+                                        {currentAssignment.assignment.description}
+                                    </Text>
+                                </View>
+                            )}
 
                             {currentAssignment.assignment?.instructions && (
-                                <>
+                                <View style={styles.detailedInstructionsBlock}>
                                     <Text style={styles.detailedInstructionsTitle}>Detailed Instructions:</Text>
                                     <Text style={styles.detailedInstructionsText}>
                                         {currentAssignment.assignment.instructions}
                                     </Text>
-                                </>
+                                </View>
+                            )}
+
+                            {!currentAssignment.assignment?.description && !currentAssignment.assignment?.instructions && (
+                                <View style={styles.noInstructionsBlock}>
+                                    <Text style={styles.noInstructionsText}>
+                                        No specific instructions provided. Please complete the assignment based on the course materials.
+                                    </Text>
+                                </View>
                             )}
 
                             <View style={styles.assignmentMetaInfo}>
@@ -458,7 +721,7 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                                             {selectedImages.length} image(s) selected ✓
                                         </Text>
                                         {selectedImages.map((img, index) => (
-                                            <Text key={index} style={styles.imageFileName}>{img}</Text>
+                                            <Text key={index} style={styles.imageFileName}>{img.name}</Text>
                                         ))}
                                     </View>
                                 ) : (
@@ -536,14 +799,64 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                                     <View style={styles.scoreContainer}>
                                         <Text style={styles.scoreLabel}>Your Score:</Text>
                                         <Text style={styles.scoreValue}>
-                                            {results.ai_score ? Math.round(results.ai_score) : 0}%
+                                            {typeof results.ai_score === 'number' && !isNaN(results.ai_score)
+                                                ? `${Math.round(results.ai_score)}%`
+                                                : '— Pending'}
                                         </Text>
                                     </View>
 
                                     {results.ai_feedback && (
-                                        <View style={styles.feedbackContainer}>
-                                            <Text style={styles.feedbackTitle}>AI Feedback:</Text>
-                                            <Text style={styles.feedbackText}>{results.ai_feedback}</Text>
+                                        <View style={[
+                                            styles.feedbackContainer,
+                                            results.ai_feedback.toLowerCase().includes('error') ||
+                                                results.ai_feedback.toLowerCase().includes('issue') ||
+                                                results.ai_feedback.toLowerCase().includes('invalid')
+                                                ? styles.feedbackErrorContainer
+                                                : styles.feedbackContainer
+                                        ]}>
+                                            <Text style={[
+                                                styles.feedbackTitle,
+                                                results.ai_feedback.toLowerCase().includes('error') ||
+                                                    results.ai_feedback.toLowerCase().includes('issue') ||
+                                                    results.ai_feedback.toLowerCase().includes('invalid')
+                                                    ? styles.feedbackErrorTitle
+                                                    : styles.feedbackTitle
+                                            ]}>
+                                                {results.ai_feedback.toLowerCase().includes('error') ||
+                                                    results.ai_feedback.toLowerCase().includes('issue') ||
+                                                    results.ai_feedback.toLowerCase().includes('invalid')
+                                                    ? '⚠️ Processing Issue'
+                                                    : '🤖 AI Feedback'}
+                                            </Text>
+                                            {(() => {
+                                                const raw = results.ai_feedback || '';
+                                                const isIssue = raw.toLowerCase().includes('error') || raw.toLowerCase().includes('issue') || raw.toLowerCase().includes('invalid');
+                                                const cleaned = cleanAIText(raw) || '';
+                                                return (
+                                                    <>
+                                                        <Text style={[
+                                                            styles.feedbackText,
+                                                            isIssue ? styles.feedbackErrorText : styles.feedbackText
+                                                        ]}>
+                                                            {isIssue
+                                                                ? 'We had trouble processing your submission. Your work is saved. You can retry now or continue learning; we\'ll grade it soon.'
+                                                                : cleaned}
+                                                        </Text>
+                                                        {isIssue && cleaned && (
+                                                            <TouchableOpacity onPress={() => setShowTechDetails(v => !v)} style={{ marginTop: 8 }}>
+                                                                <Text style={{ color: '#007AFF', fontWeight: '600' }}>
+                                                                    {showTechDetails ? 'Hide details' : 'View technical details'}
+                                                                </Text>
+                                                            </TouchableOpacity>
+                                                        )}
+                                                        {isIssue && showTechDetails && (
+                                                            <Text style={[styles.feedbackText, { marginTop: 6, color: '#555' }]}>
+                                                                {cleaned}
+                                                            </Text>
+                                                        )}
+                                                    </>
+                                                );
+                                            })()}
                                         </View>
                                     )}
 
@@ -572,13 +885,47 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
     };
 
     // Render assignment card
+    const viewAssignmentResults = async (assignment: StudentAssignment) => {
+        try {
+            if (!token) return;
+            const latest = await gradesService.findLatestSubmissionForAssignment(
+                assignment.assignment_id,
+                token
+            );
+            if (latest) {
+                navigation.navigate('GradeDetails', {
+                    submissionId: latest.id,
+                    submissionType: latest.submission_type as any,
+                });
+            } else {
+                Alert.alert(
+                    'Results not found',
+                    'We could not find a graded submission yet. Please try again shortly.'
+                );
+            }
+        } catch (e) {
+            Alert.alert('Error', 'Unable to open grade details right now.');
+        }
+    };
+
     const renderAssignmentCard = (assignment: StudentAssignment) => {
         const statusDisplay = getAssignmentStatusDisplay(assignment);
         const isCompleted = assignment.status === 'graded';
-        const canStart = assignment.status === 'assigned';
+        const mappedStatus = assignmentStatus ? mapBackendStatusToFrontend(
+            assignmentStatus.student_assignment.status,
+            assignmentStatus.student_assignment.grade,
+            assignmentStatus.attempts_info.can_retry
+        ) : null;
+
+        const canStart = assignment.status === 'assigned' ||
+            mappedStatus === 'not_attempted' ||
+            mappedStatus === 'failed_can_retry';
+        const canRetry = mappedStatus === 'failed_can_retry';
+        const isPassed = mappedStatus === 'passed';
+        const hasMaxAttempts = mappedStatus === 'failed_no_retry';
 
         return (
-            <View key={assignment.id} style={styles.assignmentCard}>
+            <View style={styles.assignmentCard}>
                 <View style={styles.assignmentHeader}>
                     <View style={styles.assignmentInfo}>
                         <Text style={styles.assignmentTitle}>{assignment.assignment?.title}</Text>
@@ -625,32 +972,144 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
 
                 <View style={styles.instructionsContainer}>
                     <Text style={styles.instructionsTitle}>Instructions:</Text>
-                    <Text style={styles.instructionsText} numberOfLines={3}>
-                        {assignment.assignment?.instructions || assignment.assignment?.description}
-                    </Text>
+                    {(assignment.assignment?.instructions || assignment.assignment?.description) ? (
+                        <Text style={styles.instructionsText}>
+                            {assignment.assignment?.instructions || assignment.assignment?.description}
+                        </Text>
+                    ) : (
+                        <Text style={[styles.instructionsText, styles.noInstructionsText]}>
+                            No specific instructions provided for this assignment.
+                        </Text>
+                    )}
                 </View>
 
-                {assignment.feedback && (
-                    <View style={styles.feedbackContainer}>
-                        <Text style={styles.feedbackTitle}>AI Feedback:</Text>
-                        <Text style={styles.feedbackText} numberOfLines={3}>
-                            {assignment.feedback}
+                {isCompleted && assignment.feedback && (
+                    <View style={[
+                        styles.feedbackContainer,
+                        assignment.feedback.toLowerCase().includes('error') ||
+                            assignment.feedback.toLowerCase().includes('issue') ||
+                            assignment.feedback.toLowerCase().includes('invalid')
+                            ? styles.feedbackErrorContainer
+                            : styles.feedbackContainer
+                    ]}>
+                        <Text style={[
+                            styles.feedbackTitle,
+                            assignment.feedback.toLowerCase().includes('error') ||
+                                assignment.feedback.toLowerCase().includes('issue') ||
+                                assignment.feedback.toLowerCase().includes('invalid')
+                                ? styles.feedbackErrorTitle
+                                : styles.feedbackTitle
+                        ]}>
+                            {assignment.feedback.toLowerCase().includes('error') ||
+                                assignment.feedback.toLowerCase().includes('issue') ||
+                                assignment.feedback.toLowerCase().includes('invalid')
+                                ? '⚠️ Processing Issue'
+                                : '✅ AI Feedback'}
+                        </Text>
+                        <Text style={[
+                            styles.feedbackText,
+                            assignment.feedback.toLowerCase().includes('error') ||
+                                assignment.feedback.toLowerCase().includes('issue') ||
+                                assignment.feedback.toLowerCase().includes('invalid')
+                                ? styles.feedbackErrorText
+                                : styles.feedbackText
+                        ]}>
+                            {assignment.feedback.toLowerCase().includes('error') ||
+                                assignment.feedback.toLowerCase().includes('issue') ||
+                                assignment.feedback.toLowerCase().includes('invalid')
+                                ? 'There was a technical issue processing your submission. Your work has been saved and will be reviewed. Please try submitting again or contact support if needed.\n\nDetails: ' + assignment.feedback
+                                : assignment.feedback}
                         </Text>
                     </View>
                 )}
 
+                {/* Assignment Status Details */}
+                {assignmentStatus && (
+                    <View style={styles.assignmentDetails}>
+                        <View style={styles.assignmentDetailItem}>
+                            <Text style={styles.assignmentDetailLabel}>Attempts:</Text>
+                            <Text style={styles.assignmentDetailValue}>
+                                {assignmentStatus.attempts_info.attempts_used}/3
+                            </Text>
+                        </View>
+                        {assignmentStatus.student_assignment.grade !== undefined && (
+                            <View style={styles.assignmentDetailItem}>
+                                <Text style={styles.assignmentDetailLabel}>Best Score:</Text>
+                                <Text style={[
+                                    styles.assignmentDetailValue,
+                                    {
+                                        color: assignmentStatus.student_assignment.grade >= 80 ? '#28A745' : '#dc3545',
+                                        fontWeight: 'bold'
+                                    }
+                                ]}>
+                                    {assignmentStatus.student_assignment.grade}%
+                                </Text>
+                            </View>
+                        )}
+                        {/* Next attempt timing - using message field from backend */}
+                        {assignmentStatus.message && !assignmentStatus.passing_grade && (
+                            <View style={styles.assignmentDetailItem}>
+                                <Text style={styles.assignmentDetailLabel}>Status:</Text>
+                                <Text style={[styles.assignmentDetailValue, { color: '#856404' }]}>
+                                    {assignmentStatus.message}
+                                </Text>
+                            </View>
+                        )}
+                    </View>
+                )}
+
                 <View style={styles.assignmentActions}>
-                    {canStart ? (
+                    {isPassed ? (
+                        <TouchableOpacity
+                            style={[styles.viewButton, { backgroundColor: '#E8F5E8' }]}
+                            onPress={() => viewAssignmentResults(assignment)}
+                        >
+                            <Text style={[styles.viewButtonText, { color: '#28A745' }]}>
+                                ✓ Completed - View Results
+                            </Text>
+                        </TouchableOpacity>
+                    ) : hasMaxAttempts ? (
+                        <TouchableOpacity
+                            style={[styles.viewButton, { backgroundColor: '#FFEBEE', opacity: 0.7 }]}
+                            disabled={true}
+                        >
+                            <Text style={[styles.viewButtonText, { color: '#dc3545' }]}>
+                                Max Attempts Reached
+                            </Text>
+                        </TouchableOpacity>
+                    ) : canRetry ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <TouchableOpacity
+                                style={[styles.submitButton, { backgroundColor: '#FD7E14', flex: 1, marginRight: 8 }]}
+                                onPress={retryAssignment}
+                                disabled={grading}
+                            >
+                                {grading ? (
+                                    <ActivityIndicator color="#fff" size="small" />
+                                ) : (
+                                    <Text style={styles.submitButtonText}>Retry Assignment</Text>
+                                )}
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.viewButton, { flex: 0.6 }]}
+                                onPress={() => viewAssignmentResults(assignment)}
+                            >
+                                <Text style={styles.viewButtonText}>View Last</Text>
+                            </TouchableOpacity>
+                        </View>
+                    ) : canStart ? (
                         <TouchableOpacity
                             style={styles.submitButton}
                             onPress={() => startAssignmentWorkflow(assignment)}
                         >
-                            <Text style={styles.submitButtonText}>Start Assignment</Text>
+                            <Text style={styles.submitButtonText}>
+                                {mappedStatus === 'not_attempted' ? 'Start Assignment' : 'Continue Assignment'}
+                            </Text>
                         </TouchableOpacity>
                     ) : (
                         <TouchableOpacity
                             style={styles.viewButton}
-                            onPress={() => {/* Navigate to submission details */ }}
+                            onPress={() => viewAssignmentResults(assignment)}
                         >
                             <Text style={styles.viewButtonText}>
                                 {isCompleted ? 'View Results' : 'View Details'}
@@ -661,8 +1120,6 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
             </View>
         );
     };
-
-    const filteredAssignments = getFilteredAssignments();
 
     // If workflow is active, show only the workflow interface
     if (workflowActive) {
@@ -699,20 +1156,76 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                 }
             >
                 <View style={styles.contentContainer}>
-                    {filteredAssignments.length === 0 ? (
-                        <View style={styles.emptyContainer}>
-                            <Text style={styles.emptyText}>No assignments found</Text>
-                            <Text style={styles.emptySubtext}>
-                                {activeTab === 'pending'
-                                    ? 'All assignments have been submitted'
-                                    : activeTab === 'submitted'
-                                        ? 'No assignments submitted yet'
-                                        : 'Assignments will appear here when available'
-                                }
-                            </Text>
-                        </View>
-                    ) : (
-                        filteredAssignments.map(renderAssignmentCard)
+                    {/* ALL tab: show both sections, like CourseDetails */}
+                    {activeTab === 'all' && (
+                        <>
+                            {assignments.length > 0 && (
+                                <View style={{ marginBottom: 16 }}>
+                                    <Text style={styles.sectionHeading}>Your Assigned Work ({assignments.length})</Text>
+                                    {assignments.map((a, idx) => (
+                                        <React.Fragment key={`assigned-${a?.id ?? a?.assignment_id ?? idx}`}>
+                                            {renderAssignmentCard(a)}
+                                        </React.Fragment>
+                                    ))}
+                                </View>
+                            )}
+                            <View style={{ marginBottom: 8 }}>
+                                <Text style={styles.sectionHeading}>Available Assignments ({availableDefinitionAdapters.length})</Text>
+                                {availableDefinitionAdapters.length > 0 ? (
+                                    availableDefinitionAdapters.map((a, idx) => (
+                                        <React.Fragment key={`available-${a?.id ?? a?.assignment_id ?? idx}`}>
+                                            {renderAssignmentCard(a)}
+                                        </React.Fragment>
+                                    ))
+                                ) : (
+                                    <Text style={{ fontSize: 13, color: '#666', marginTop: 4 }}>
+                                        All available assignments have already been assigned to you.
+                                    </Text>
+                                )}
+                            </View>
+                            {allCount === 0 && (
+                                <View style={styles.emptyContainer}>
+                                    <Text style={styles.emptyText}>No assignments available</Text>
+                                    <Text style={styles.emptySubtext}>Your instructor hasn't added assignments yet.</Text>
+                                </View>
+                            )}
+                        </>
+                    )}
+
+                    {/* PENDING tab: show only student-assigned items awaiting submission */}
+                    {activeTab === 'pending' && (
+                        <>
+                            {pendingAssigned.length === 0 ? (
+                                <View style={styles.emptyContainer}>
+                                    <Text style={styles.emptyText}>No pending assignments</Text>
+                                    <Text style={styles.emptySubtext}>Everything is up to date. Check Available Assignments in All tab.</Text>
+                                </View>
+                            ) : (
+                                pendingAssigned.map((a, idx) => (
+                                    <React.Fragment key={`pending-${a?.id ?? a?.assignment_id ?? idx}`}>
+                                        {renderAssignmentCard(a)}
+                                    </React.Fragment>
+                                ))
+                            )}
+                        </>
+                    )}
+
+                    {/* SUBMITTED/COMPLETED tab: show graded or submitted */}
+                    {activeTab === 'submitted' && (
+                        <>
+                            {submittedOrGraded.length === 0 ? (
+                                <View style={styles.emptyContainer}>
+                                    <Text style={styles.emptyText}>No completed assignments yet</Text>
+                                    <Text style={styles.emptySubtext}>Finish an assignment to see results here.</Text>
+                                </View>
+                            ) : (
+                                submittedOrGraded.map((a, idx) => (
+                                    <React.Fragment key={`completed-${a?.id ?? a?.assignment_id ?? idx}`}>
+                                        {renderAssignmentCard(a)}
+                                    </React.Fragment>
+                                ))
+                            )}
+                        </>
                     )}
                 </View>
             </ScrollView>
@@ -725,6 +1238,12 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: '#f8f9fa',
+    },
+    sectionHeading: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#222',
+        marginBottom: 6
     },
     scrollView: {
         flex: 1,
@@ -910,6 +1429,10 @@ const styles = StyleSheet.create({
         color: '#333',
         lineHeight: 18,
     },
+    noInstructionsText: {
+        fontStyle: 'italic',
+        color: '#999',
+    },
     feedbackContainer: {
         backgroundColor: '#e3f2fd',
         borderRadius: 8,
@@ -925,6 +1448,25 @@ const styles = StyleSheet.create({
     feedbackText: {
         fontSize: 13,
         color: '#1565c0',
+        lineHeight: 18,
+    },
+    feedbackErrorContainer: {
+        backgroundColor: '#ffebee',
+        borderRadius: 8,
+        padding: 12,
+        marginBottom: 12,
+        borderLeftWidth: 4,
+        borderLeftColor: '#f44336',
+    },
+    feedbackErrorTitle: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#d32f2f',
+        marginBottom: 4,
+    },
+    feedbackErrorText: {
+        fontSize: 13,
+        color: '#c62828',
         lineHeight: 18,
     },
     assignmentActions: {
@@ -1089,18 +1631,33 @@ const styles = StyleSheet.create({
         color: '#1a1a1a',
         marginBottom: 16,
     },
+    descriptionBlock: {
+        marginBottom: 16,
+    },
+    detailedInstructionsBlock: {
+        backgroundColor: '#f8f9fa',
+        borderRadius: 8,
+        padding: 12,
+        marginBottom: 16,
+    },
+    noInstructionsBlock: {
+        backgroundColor: '#fff3cd',
+        borderRadius: 8,
+        padding: 12,
+        marginBottom: 16,
+        borderLeftWidth: 4,
+        borderLeftColor: '#ffc107',
+    },
     detailedInstructionsTitle: {
         fontSize: 16,
         fontWeight: 'bold',
         color: '#1a1a1a',
-        marginTop: 16,
         marginBottom: 8,
     },
     detailedInstructionsText: {
         fontSize: 14,
         color: '#666',
         lineHeight: 20,
-        marginBottom: 16,
     },
     assignmentMetaInfo: {
         backgroundColor: '#f8f9fa',

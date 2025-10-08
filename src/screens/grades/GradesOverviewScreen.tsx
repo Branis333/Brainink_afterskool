@@ -69,26 +69,38 @@ export const GradesOverviewScreen: React.FC = () => {
             const recentSessions = await gradesService.getUserSessions(token, { limit: 10 });
 
             // Load recent submissions
-            if (recentSessions.length > 0) {
-                try {
+            // Try to get submissions from both sessions and assignments
+            try {
+                const allSubmissions: AISubmission[] = [];
+
+                // Get submissions from recent sessions
+                if (recentSessions.length > 0) {
                     const submissionsPromises = recentSessions
                         .filter(session => session.id)
-                        .slice(0, 5)
+                        .slice(0, 10)
                         .map(session =>
                             gradesService.getSessionSubmissions(session.id, token)
                                 .catch(() => []) // Handle errors gracefully
                         );
 
                     const submissionsArrays = await Promise.all(submissionsPromises);
-                    const allSubmissions = submissionsArrays.flat()
-                        .filter(submission => submission.ai_processed)
-                        .slice(0, 5);
+                    const sessionSubmissions = submissionsArrays.flat()
+                        .filter(submission => submission.ai_processed && submission.ai_score !== null);
 
-                    setRecentSubmissions(allSubmissions);
-                } catch (error) {
-                    console.warn('Error loading recent submissions:', error);
-                    setRecentSubmissions([]);
+                    allSubmissions.push(...sessionSubmissions);
                 }
+
+                // Remove duplicates by ID and sort by date, take top 5
+                const uniqueSubmissions = Array.from(
+                    new Map(allSubmissions.map(s => [s.id, s])).values()
+                ).sort((a, b) =>
+                    new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime()
+                ).slice(0, 5);
+
+                setRecentSubmissions(uniqueSubmissions);
+            } catch (error) {
+                console.warn('Error loading recent submissions:', error);
+                setRecentSubmissions([]);
             }
 
             // Load student assignments for workflow integration
@@ -326,7 +338,7 @@ export const GradesOverviewScreen: React.FC = () => {
                                         submission.submission_type.slice(1)}
                                 </Text>
                                 <Text style={styles.gradeItemDate}>
-                                    {new Date(submission.submitted_at).toLocaleDateString()}
+                                    {gradesService.formatRelativeTime(submission.submitted_at)}
                                 </Text>
                             </View>
                         </View>

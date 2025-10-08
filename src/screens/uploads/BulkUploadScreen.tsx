@@ -46,7 +46,9 @@ interface FileItem {
 export const BulkUploadScreen: React.FC<Props> = ({ navigation, route }) => {
     const { token, user } = useAuth();
     const [selectedFiles, setSelectedFiles] = useState<FileItem[]>([]);
-    const [sessionId, setSessionId] = useState<string>('');
+    const [courseId, setCourseId] = useState<string>(route.params?.courseId ? String(route.params.courseId) : '');
+    const [assignmentId, setAssignmentId] = useState<string>(route.params?.assignmentId ? String(route.params.assignmentId) : '');
+    const [blockId, setBlockId] = useState<string>(route.params?.blockId ? String(route.params.blockId) : '');
     const [submissionType, setSubmissionType] = useState<'homework' | 'quiz' | 'practice' | 'assessment'>('homework');
     const [uploadProgress, setUploadProgress] = useState<BulkUploadProgress>({
         progress: 0,
@@ -62,12 +64,10 @@ export const BulkUploadScreen: React.FC<Props> = ({ navigation, route }) => {
 
     // Pre-fill session ID if provided from navigation
     useEffect(() => {
-        if (route.params?.sessionId) {
-            setSessionId(route.params.sessionId.toString());
-        }
-        if (route.params?.submissionType) {
-            setSubmissionType(route.params.submissionType);
-        }
+        if (route.params?.courseId) setCourseId(String(route.params.courseId));
+        if (route.params?.assignmentId) setAssignmentId(String(route.params.assignmentId));
+        if (route.params?.blockId) setBlockId(String(route.params.blockId));
+        if (route.params?.submissionType) setSubmissionType(route.params.submissionType);
     }, [route.params]);
 
     // Update total file size when files change
@@ -146,9 +146,8 @@ export const BulkUploadScreen: React.FC<Props> = ({ navigation, route }) => {
             return { valid: false, error: 'Please select at least one file' };
         }
 
-        if (!sessionId.trim()) {
-            return { valid: false, error: 'Please enter a session ID' };
-        }
+        if (!courseId.trim()) return { valid: false, error: 'Missing course ID' };
+        if (!assignmentId.trim()) return { valid: false, error: 'Missing assignment ID' };
 
         const invalidFiles = selectedFiles.filter(item => !item.isValid);
         if (invalidFiles.length > 0) {
@@ -188,11 +187,13 @@ export const BulkUploadScreen: React.FC<Props> = ({ navigation, route }) => {
             const validFiles = selectedFiles.filter(item => item.isValid).map(item => item.file);
 
             const uploadRequest: BulkPDFUploadRequest = {
-                session_id: parseInt(sessionId),
+                course_id: parseInt(courseId),
                 submission_type: submissionType,
                 files: validFiles,
                 storage_mode: 'database',
                 skip_db: false,
+                assignment_id: parseInt(assignmentId),
+                block_id: blockId ? parseInt(blockId) : undefined,
             };
 
             // Simulate upload progress
@@ -212,7 +213,7 @@ export const BulkUploadScreen: React.FC<Props> = ({ navigation, route }) => {
             clearInterval(progressInterval);
 
             // Use the new workflow integration method
-            const assignmentId = route.params?.assignmentId || 1;
+            const assignmentIdLocal = parseInt(assignmentId || String(route.params?.assignmentId || '0'));
             setUploadProgress({
                 progress: 70,
                 status: 'uploading',
@@ -221,11 +222,15 @@ export const BulkUploadScreen: React.FC<Props> = ({ navigation, route }) => {
             });
 
             const workflowResult = await uploadsService.uploadImagesForAssignmentWorkflow(
-                parseInt(sessionId),
-                assignmentId,
+                parseInt(courseId),
+                assignmentIdLocal,
                 validFiles,
                 token,
-                submissionType
+                submissionType,
+                {
+                    lesson_id: route.params?.lessonId,
+                    block_id: route.params?.blockId,
+                }
             );
 
             setUploadProgress({
@@ -374,14 +379,37 @@ export const BulkUploadScreen: React.FC<Props> = ({ navigation, route }) => {
                 <ScrollView style={styles.scrollContainer}>
                     {/* Upload Form */}
                     <View style={styles.form}>
-                        {/* Session ID Input */}
+                        {/* Context Inputs */}
+
                         <View style={styles.inputGroup}>
-                            <Text style={styles.inputLabel}>Session ID *</Text>
+                            <Text style={styles.inputLabel}>Course ID *</Text>
                             <TextInput
                                 style={styles.textInput}
-                                value={sessionId}
-                                onChangeText={setSessionId}
-                                placeholder="Enter session ID"
+                                value={courseId}
+                                onChangeText={setCourseId}
+                                placeholder="Enter course ID"
+                                keyboardType="numeric"
+                                editable={uploadProgress.status === 'idle' || uploadProgress.status === 'error'}
+                            />
+                        </View>
+                        <View style={styles.inputGroup}>
+                            <Text style={styles.inputLabel}>Assignment ID *</Text>
+                            <TextInput
+                                style={styles.textInput}
+                                value={assignmentId}
+                                onChangeText={setAssignmentId}
+                                placeholder="Enter assignment ID"
+                                keyboardType="numeric"
+                                editable={uploadProgress.status === 'idle' || uploadProgress.status === 'error'}
+                            />
+                        </View>
+                        <View style={styles.inputGroup}>
+                            <Text style={styles.inputLabel}>Block ID (optional)</Text>
+                            <TextInput
+                                style={styles.textInput}
+                                value={blockId}
+                                onChangeText={setBlockId}
+                                placeholder="Enter block ID (if applicable)"
                                 keyboardType="numeric"
                                 editable={uploadProgress.status === 'idle' || uploadProgress.status === 'error'}
                             />
@@ -518,7 +546,8 @@ export const BulkUploadScreen: React.FC<Props> = ({ navigation, route }) => {
                             style={[
                                 styles.uploadButton,
                                 (selectedFiles.length === 0 ||
-                                    !sessionId.trim() ||
+                                    !courseId.trim() ||
+                                    !assignmentId.trim() ||
                                     uploadProgress.status === 'uploading' ||
                                     uploadProgress.status === 'converting' ||
                                     uploadProgress.status === 'processing') &&
@@ -528,7 +557,8 @@ export const BulkUploadScreen: React.FC<Props> = ({ navigation, route }) => {
                             activeOpacity={0.7}
                             disabled={
                                 selectedFiles.length === 0 ||
-                                !sessionId.trim() ||
+                                !courseId.trim() ||
+                                !assignmentId.trim() ||
                                 uploadProgress.status === 'uploading' ||
                                 uploadProgress.status === 'converting' ||
                                 uploadProgress.status === 'processing' ||

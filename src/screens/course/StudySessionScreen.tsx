@@ -14,10 +14,12 @@ import {
     ActivityIndicator,
     Dimensions,
     Modal,
+    Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useFocusEffect } from '@react-navigation/native';
+import { WebView } from 'react-native-webview';
 import { useAuth } from '../../context/AuthContext';
 import {
     afterSchoolService,
@@ -59,16 +61,12 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
     const [course, setCourse] = useState<CourseWithLessons | CourseWithBlocks | null>(null);
     const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
     const [loading, setLoading] = useState(true);
-    const [sessionTime, setSessionTime] = useState(0); // in seconds
-    const [isActive, setIsActive] = useState(true);
     const [completionPercentage, setCompletionPercentage] = useState(0);
-    const [showEndSessionModal, setShowEndSessionModal] = useState(false);
-    const [endingSession, setEndingSession] = useState(false);
+    const [markingDone, setMarkingDone] = useState(false);
+    const [expandedVideoIndex, setExpandedVideoIndex] = useState<number | null>(null);
+    const [isAlreadyCompleted, setIsAlreadyCompleted] = useState(false);
 
-    const intervalRef = useRef<NodeJS.Timeout | null>(null);
-    const startTimeRef = useRef<Date>(new Date());
-
-    // Load session data
+    // Load content data (mark-done model - no session required)
     const loadSessionData = async () => {
         try {
             setLoading(true);
@@ -77,12 +75,9 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                 throw new Error('No authentication token available');
             }
 
-            const sessionData = await afterSchoolService.getStudySession(sessionId, token);
-            setSession(sessionData);
-
-            // Load different data based on session type (lesson or block)
-            if (blockId && sessionData.block_id) {
-                // Block-based session
+            // Load content directly without requiring a session
+            if (blockId) {
+                // Block-based content
                 const [blockData, courseData, assignmentsData] = await Promise.all([
                     afterSchoolService.getCourseBlockDetails(courseId, blockId, token),
                     afterSchoolService.getCourseWithBlocks(courseId, token),
@@ -91,8 +86,31 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                 setBlock(blockData);
                 setCourse(courseData);
                 setAssignments(assignmentsData);
-            } else if (lessonId && sessionData.lesson_id) {
-                // Lesson-based session
+
+                // Check completion status for this block
+                try {
+                    const blocksProgress = await afterSchoolService.getCourseBlocksProgress(courseId, token);
+                    const me = (blocksProgress?.blocks || []).find(b => b.block_id === blockId);
+                    setIsAlreadyCompleted(!!me?.is_completed);
+                } catch (_) {
+                    setIsAlreadyCompleted(false);
+                }
+
+                // Create a mock session object for UI compatibility
+                setSession({
+                    id: sessionId,
+                    user_id: 0, // Will be filled by backend
+                    course_id: courseId,
+                    lesson_id: lessonId,
+                    block_id: blockId,
+                    completion_percentage: 0, // Will be updated by mark-done actions
+                    started_at: new Date().toISOString(),
+                    status: 'active',
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                });
+            } else if (lessonId) {
+                // Lesson-based content
                 const [lessonData, courseData] = await Promise.all([
                     afterSchoolService.getLessonDetails(courseId, lessonId, token),
                     afterSchoolService.getCourseDetails(courseId, token)
@@ -100,18 +118,23 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                 setLesson(lessonData);
                 setCourse(courseData);
                 setAssignments([]);
+
+                // Create a mock session object for UI compatibility
+                setSession({
+                    id: sessionId,
+                    user_id: 0, // Will be filled by backend
+                    course_id: courseId,
+                    lesson_id: lessonId,
+                    block_id: blockId,
+                    completion_percentage: 0, // Will be updated by mark-done actions
+                    started_at: new Date().toISOString(),
+                    status: 'active',
+                    created_at: new Date().toISOString(),
+                    updated_at: new Date().toISOString()
+                });
             }
 
-            setCompletionPercentage(sessionData.completion_percentage);
-
-            // Calculate elapsed time if session is ongoing
-            if (!sessionData.ended_at) {
-                const startTime = new Date(sessionData.started_at);
-                const now = new Date();
-                const elapsedSeconds = Math.floor((now.getTime() - startTime.getTime()) / 1000);
-                setSessionTime(elapsedSeconds);
-                startTimeRef.current = startTime;
-            }
+            setCompletionPercentage(0); // Start at 0, will be updated when marked as done
         } catch (error) {
             console.error('Error loading session data:', error);
             Alert.alert(
@@ -124,85 +147,68 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
         }
     };
 
-    // Start session timer
-    const startTimer = useCallback(() => {
-        if (intervalRef.current) {
-            clearInterval(intervalRef.current);
-        }
 
-        intervalRef.current = setInterval(() => {
-            if (isActive) {
-                setSessionTime(prev => prev + 1);
-            }
-        }, 1000);
-    }, [isActive]);
-
-    // Stop session timer
-    const stopTimer = useCallback(() => {
-        if (intervalRef.current) {
-            clearInterval(intervalRef.current);
-            intervalRef.current = undefined;
-        }
-    }, []);
 
     // Load data on screen focus
     useFocusEffect(
         useCallback(() => {
             loadSessionData();
-            return () => {
-                stopTimer();
-            };
         }, [sessionId, token])
     );
 
-    // Start timer when session is active
-    useEffect(() => {
-        if (session && !session.ended_at && isActive) {
-            startTimer();
-        } else {
-            stopTimer();
-        }
-
-        return () => stopTimer();
-    }, [session, isActive, startTimer, stopTimer]);
-
     // Handle back button press
     const handleBackPress = () => {
-        if (session && !session.ended_at) {
-            setShowEndSessionModal(true);
-        } else {
-            navigation.goBack();
-        }
+        navigation.goBack();
     };
 
-    // End study session
-    const endStudySession = async (status: 'completed' | 'abandoned') => {
+    // Mark block/lesson as done
+    const markAsDone = async () => {
         try {
-            setEndingSession(true);
+            setMarkingDone(true);
 
-            if (!token || !session) return;
+            if (!token || !blockId) {
+                Alert.alert('Error', 'Missing required information to mark as done.');
+                return;
+            }
 
-            await afterSchoolService.endStudySession(sessionId, {
-                completion_percentage: completionPercentage,
-                status
-            }, token);
+            await afterSchoolService.markStudySessionDone(blockId, courseId, token);
 
-            setShowEndSessionModal(false);
+            // Immediately reflect completed state
+            setIsAlreadyCompleted(true);
+            setCompletionPercentage(100);
 
-            // Navigate back to course details
-            navigation.navigate('CourseDetails', {
-                courseId,
-                courseTitle
-            });
+            // When leaving this screen, ensure callers can force-refresh
+            const refreshTs = Date.now();
+
+            Alert.alert(
+                'Success!',
+                'You have successfully completed this study session.',
+                [
+                    {
+                        text: 'Continue to Assignments',
+                        onPress: () => {
+                            continueToAssignments();
+                            // Also push a refresh hint for CourseDetails (and Progress if opened next)
+                            navigation.navigate('CourseDetails', { courseId, courseTitle, refreshTs });
+                        },
+                        style: 'default'
+                    },
+                    {
+                        text: 'Back to Course',
+                        onPress: () => navigation.navigate('CourseDetails', { courseId, courseTitle, refreshTs }),
+                        style: 'default'
+                    }
+                ]
+            );
         } catch (error) {
-            console.error('Error ending study session:', error);
+            console.error('Error marking study session as done:', error);
             Alert.alert(
                 'Error',
-                'Failed to end study session. Please try again.',
+                'Failed to mark study session as done. Please try again.',
                 [{ text: 'OK' }]
             );
         } finally {
-            setEndingSession(false);
+            setMarkingDone(false);
         }
     };
 
@@ -210,47 +216,39 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
     const navigateToAssignment = (assignment: StudentAssignment) => {
         navigation.navigate('CourseAssignment', {
             courseId,
+            courseTitle,
             assignmentId: assignment.assignment_id,
-            assignmentTitle: `Assignment ${assignment.assignment_id}`
+            assignmentTitle: assignment.assignment?.title || `Assignment ${assignment.assignment_id}`,
+            startWorkflow: true  // Automatically start the workflow
         });
     };
 
     // Continue to assignments after completing session
     const continueToAssignments = () => {
-        const pendingAssignment = assignments.find(a => a.status === 'assigned');
+        // Get block-specific pending assignments if we have a blockId
+        const blockAssignments = blockId
+            ? assignments.filter(a => {
+                const assignmentBlockId = a.assignment?.block_id || (a as any).block_id;
+                return assignmentBlockId === blockId && a.status === 'assigned';
+            })
+            : assignments.filter(a => a.status === 'assigned');
+
+        const pendingAssignment = blockAssignments[0];
+
         if (pendingAssignment) {
             navigateToAssignment(pendingAssignment);
         } else {
-            // Navigate to course details to see all assignments
-            navigation.navigate('CourseDetails', { courseId, courseTitle });
+            // If no block-specific assignments, navigate to course assignments page
+            navigation.navigate('CourseAssignment', {
+                courseId,
+                courseTitle
+            });
         }
     };
 
     // Mark lesson/block as completed
     const markContentCompleted = () => {
-        setCompletionPercentage(100);
-
-        const contentType = block ? 'Block' : 'Lesson';
-        const hasPendingAssignments = assignments.some(a => a.status === 'assigned');
-
-        Alert.alert(
-            `${contentType} Completed!`,
-            `Great job! You have completed this ${contentType.toLowerCase()}.`,
-            [
-                {
-                    text: 'Continue Studying',
-                    style: 'default'
-                },
-                ...(hasPendingAssignments ? [{
-                    text: 'Continue to Assignments',
-                    onPress: continueToAssignments
-                }] : []),
-                {
-                    text: 'End Session',
-                    onPress: () => endStudySession('completed')
-                }
-            ]
-        );
+        markAsDone();
     };
 
     // Update progress
@@ -258,10 +256,7 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
         setCompletionPercentage(Math.min(100, Math.max(0, percentage)));
     };
 
-    // Pause/Resume session
-    const toggleSession = () => {
-        setIsActive(!isActive);
-    };
+
 
     // Format time
     const formatTime = (seconds: number): string => {
@@ -273,6 +268,201 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
             return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
         }
         return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+    };
+
+    // Open URL in browser
+    const openURL = async (url: string, title: string) => {
+        try {
+            const supported = await Linking.canOpenURL(url);
+            if (supported) {
+                await Linking.openURL(url);
+            } else {
+                Alert.alert('Error', `Cannot open URL: ${title}`);
+            }
+        } catch (error) {
+            console.error('Error opening URL:', error);
+            Alert.alert('Error', 'Failed to open link');
+        }
+    };
+
+    // Extract YouTube video ID from URL
+    const getYouTubeVideoId = (url: string): string | null => {
+        try {
+            // Handle various YouTube URL formats
+            const patterns = [
+                /(?:https?:\/\/)?(?:www\.)?youtube\.com\/watch\?v=([^&]+)/,
+                /(?:https?:\/\/)?(?:www\.)?youtube\.com\/embed\/([^?]+)/,
+                /(?:https?:\/\/)?youtu\.be\/([^?]+)/,
+                /(?:https?:\/\/)?(?:www\.)?youtube\.com\/v\/([^?]+)/
+            ];
+
+            for (const pattern of patterns) {
+                const match = url.match(pattern);
+                if (match && match[1]) {
+                    return match[1];
+                }
+            }
+            return null;
+        } catch (error) {
+            console.error('Error extracting YouTube ID:', error);
+            return null;
+        }
+    };
+
+    // Toggle video player expansion
+    const toggleVideoPlayer = (index: number) => {
+        setExpandedVideoIndex(expandedVideoIndex === index ? null : index);
+    };
+
+    // Render video resources
+    const renderVideoResources = () => {
+        console.log('🎬 renderVideoResources called (Study Session)');
+        console.log('🎬 block.resources:', block?.resources);
+
+        if (!block?.resources || block.resources.length === 0) {
+            console.log('❌ No resources found');
+            return null;
+        }
+
+        const videoResources = block.resources.filter((r: any) => r.type === 'video');
+        console.log('🎬 Video resources filtered:', videoResources);
+        console.log('🎬 Video resources count:', videoResources.length);
+
+        if (videoResources.length === 0) {
+            console.log('❌ No video resources found');
+            return null;
+        }
+
+        return (
+            <View style={styles.resourcesContainer}>
+                <Text style={styles.resourcesSectionTitle}>🎥 Video Resources</Text>
+                <Text style={styles.resourcesSectionSubtitle}>
+                    Watch these videos to learn more about this topic
+                </Text>
+                {videoResources.map((resource: any, index: number) => {
+                    const videoId = getYouTubeVideoId(resource.url);
+                    const isExpanded = expandedVideoIndex === index;
+
+                    return (
+                        <View key={index} style={styles.videoCard}>
+                            {/* Video Header */}
+                            <TouchableOpacity
+                                style={styles.videoHeader}
+                                onPress={() => toggleVideoPlayer(index)}
+                                activeOpacity={0.7}
+                            >
+                                <View style={styles.videoIconContainer}>
+                                    <Text style={styles.videoIcon}>🎬</Text>
+                                </View>
+                                <View style={styles.videoInfo}>
+                                    <Text style={styles.videoTitle} numberOfLines={2}>
+                                        {resource.title}
+                                    </Text>
+                                    {resource.search_query && !isExpanded && (
+                                        <Text style={styles.videoQuery} numberOfLines={1}>
+                                            🔍 {resource.search_query}
+                                        </Text>
+                                    )}
+                                </View>
+                                <View style={styles.videoToggleContainer}>
+                                    <Text style={styles.videoToggleText}>
+                                        {isExpanded ? 'Close' : 'Watch'}
+                                    </Text>
+                                </View>
+                            </TouchableOpacity>
+
+                            {/* Embedded Video Player */}
+                            {isExpanded && videoId && (
+                                <View style={styles.videoPlayerContainer}>
+                                    <View style={styles.videoPlayerWrapper}>
+                                        <WebView
+                                            style={styles.videoPlayer}
+                                            source={{ uri: `https://www.youtube.com/embed/${videoId}` }}
+                                            allowsFullscreenVideo={true}
+                                            javaScriptEnabled={true}
+                                            domStorageEnabled={true}
+                                        />
+                                    </View>
+                                    {resource.search_query && (
+                                        <Text style={styles.videoQueryExpanded}>
+                                            🔍 {resource.search_query}
+                                        </Text>
+                                    )}
+                                </View>
+                            )}
+
+                            {/* Fallback: Open in Browser */}
+                            {isExpanded && !videoId && (
+                                <View style={styles.videoFallbackContainer}>
+                                    <Text style={styles.videoFallbackText}>
+                                        Video preview not available
+                                    </Text>
+                                    <TouchableOpacity
+                                        style={styles.videoFallbackButton}
+                                        onPress={() => openURL(resource.url, resource.title)}
+                                    >
+                                        <Text style={styles.videoFallbackButtonText}>
+                                            Open in Browser
+                                        </Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+                        </View>
+                    );
+                })}
+            </View>
+        );
+    };
+
+    // Render article resources
+    const renderArticleResources = () => {
+        console.log('📚 renderArticleResources called (Study Session)');
+        console.log('📚 block.resources:', block?.resources);
+
+        if (!block?.resources || block.resources.length === 0) {
+            console.log('❌ No resources found for articles');
+            return null;
+        }
+
+        const articleResources = block.resources.filter((r: any) => r.type === 'article');
+        console.log('📚 Article resources filtered:', articleResources);
+        console.log('📚 Article resources count:', articleResources.length);
+
+        if (articleResources.length === 0) {
+            console.log('❌ No article resources found');
+            return null;
+        }
+
+        return (
+            <View style={styles.resourcesContainer}>
+                <Text style={styles.resourcesSectionTitle}>📚 Article Resources</Text>
+                <Text style={styles.resourcesSectionSubtitle}>
+                    Read these articles for deeper understanding
+                </Text>
+                {articleResources.map((resource: any, index: number) => (
+                    <TouchableOpacity
+                        key={index}
+                        style={styles.resourceCard}
+                        onPress={() => openURL(resource.url, resource.title)}
+                    >
+                        <View style={styles.resourceIconContainer}>
+                            <Text style={styles.resourceIcon}>📄</Text>
+                        </View>
+                        <View style={styles.resourceInfo}>
+                            <Text style={styles.resourceTitle} numberOfLines={2}>
+                                {resource.title}
+                            </Text>
+                            {resource.search_query && (
+                                <Text style={styles.resourceQuery} numberOfLines={1}>
+                                    {resource.search_query}
+                                </Text>
+                            )}
+                        </View>
+                        <Text style={styles.resourceArrow}>→</Text>
+                    </TouchableOpacity>
+                ))}
+            </View>
+        );
     };
 
     // Render loading state
@@ -306,87 +496,82 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
     // Render session header
     const renderSessionHeader = () => (
         <View style={styles.sessionHeader}>
+            {/* Minimalist top header - just back button */}
             <View style={styles.headerTop}>
                 <TouchableOpacity
                     style={styles.backButton}
                     onPress={handleBackPress}
                 >
-                    <Text style={styles.backButtonText}>←</Text>
+                    <Text style={styles.backButtonText}>← Back</Text>
                 </TouchableOpacity>
+            </View>
+        </View>
+    );
 
-                <View style={styles.sessionInfo}>
-                    <Text style={styles.sessionTitle} numberOfLines={1}>
+    // Render session footer (simplified)
+    const renderSessionFooter = () => (
+        <View style={styles.sessionFooter}>
+            {/* Session Info */}
+            <View style={styles.footerSessionInfo}>
+                <View style={styles.footerTitleRow}>
+                    <Text style={styles.footerSessionTitle} numberOfLines={1}>
                         {blockTitle || lessonTitle}
                     </Text>
-                    <Text style={styles.sessionSubtitle} numberOfLines={1}>{courseTitle}</Text>
-                    {assignments.length > 0 && (
-                        <Text style={styles.assignmentIndicator}>
-                            {assignments.filter(a => a.status === 'assigned').length} assignments pending
-                        </Text>
-                    )}
                 </View>
-
-                <View style={styles.sessionTimer}>
-                    <Text style={styles.timerText}>{formatTime(sessionTime)}</Text>
-                    <View style={[styles.statusIndicator, {
-                        backgroundColor: isActive ? '#28a745' : '#ffc107'
-                    }]} />
-                </View>
+                <Text style={styles.footerSessionSubtitle} numberOfLines={1}>{courseTitle}</Text>
+                {assignments.length > 0 && (
+                    <Text style={styles.footerAssignmentIndicator}>
+                        {assignments.filter(a => a.status === 'assigned').length} assignments pending
+                    </Text>
+                )}
             </View>
 
-            {/* Progress Bar */}
-            <View style={styles.progressContainer}>
-                <View style={styles.progressBar}>
-                    <View
-                        style={[
-                            styles.progressFill,
-                            { width: `${completionPercentage}%` }
-                        ]}
-                    />
-                </View>
-                <Text style={styles.progressText}>{Math.round(completionPercentage)}%</Text>
-            </View>
-
-            {/* Session Controls */}
+            {/* Mark as Done Button */}
             <View style={styles.sessionControls}>
                 <TouchableOpacity
-                    style={[styles.controlButton, styles.pauseButton]}
-                    onPress={toggleSession}
-                >
-                    <Text style={styles.controlButtonText}>
-                        {isActive ? 'Pause' : 'Resume'}
-                    </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                    style={[styles.controlButton, styles.progressButton]}
-                    onPress={() => updateProgress(completionPercentage + 25)}
-                >
-                    <Text style={styles.controlButtonText}>+25%</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                    style={[styles.controlButton, styles.completeButton]}
+                    style={[
+                        styles.controlButton,
+                        styles.completeButton,
+                        isAlreadyCompleted && { backgroundColor: '#10B981' }
+                    ]}
                     onPress={markContentCompleted}
+                    disabled={markingDone || isAlreadyCompleted}
                 >
-                    <Text style={styles.controlButtonText}>Complete</Text>
+                    {isAlreadyCompleted ? (
+                        <Text style={styles.controlButtonText}>Done</Text>
+                    ) : markingDone ? (
+                        <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                        <Text style={styles.controlButtonText}>Mark as Done</Text>
+                    )}
                 </TouchableOpacity>
             </View>
 
             {/* Workflow Integration */}
-            {assignments.length > 0 && (
-                <View style={styles.workflowSection}>
-                    <Text style={styles.workflowTitle}>Ready for Assignments</Text>
-                    <TouchableOpacity
-                        style={styles.workflowButton}
-                        onPress={continueToAssignments}
-                    >
-                        <Text style={styles.workflowButtonText}>
-                            Continue to Assignments ({assignments.filter(a => a.status === 'assigned').length} pending)
-                        </Text>
-                    </TouchableOpacity>
-                </View>
-            )}
+            {assignments.length > 0 && (() => {
+                const blockAssignments = blockId
+                    ? assignments.filter(a => {
+                        const assignmentBlockId = a.assignment?.block_id || (a as any).block_id;
+                        return assignmentBlockId === blockId && a.status === 'assigned';
+                    })
+                    : assignments.filter(a => a.status === 'assigned');
+
+                if (blockAssignments.length === 0) return null;
+
+                return (
+                    <View style={styles.workflowSection}>
+                        <Text style={styles.workflowTitle}>Ready for Assignments</Text>
+                        <TouchableOpacity
+                            style={styles.workflowButton}
+                            onPress={continueToAssignments}
+                        >
+                            <Text style={styles.workflowButtonText}>
+                                Continue to Assignment{blockAssignments.length > 1 ? 's' : ''} ({blockAssignments.length} pending)
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+                );
+            })()}
         </View>
     );
 
@@ -408,6 +593,9 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                     </View>
                 )}
 
+                {/* Video Resources */}
+                {renderVideoResources()}
+
                 {/* Content */}
                 <View style={styles.lessonContentCard}>
                     <Text style={styles.lessonContentTitle}>
@@ -426,6 +614,9 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                         </View>
                     )}
                 </View>
+
+                {/* Article Resources */}
+                {renderArticleResources()}
 
                 {/* Progress Tracking */}
                 <View style={styles.progressCard}>
@@ -482,60 +673,13 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
         </ScrollView>
     );
 
-    // Render end session modal
-    const renderEndSessionModal = () => (
-        <Modal
-            visible={showEndSessionModal}
-            transparent={true}
-            animationType="slide"
-            onRequestClose={() => setShowEndSessionModal(false)}
-        >
-            <View style={styles.modalOverlay}>
-                <View style={styles.modalContainer}>
-                    <Text style={styles.modalTitle}>End Study Session?</Text>
-                    <Text style={styles.modalMessage}>
-                        You've been studying for {formatTime(sessionTime)}. How would you like to end this session?
-                    </Text>
 
-                    <View style={styles.modalButtons}>
-                        <TouchableOpacity
-                            style={styles.modalButton}
-                            onPress={() => setShowEndSessionModal(false)}
-                            disabled={endingSession}
-                        >
-                            <Text style={styles.modalButtonText}>Continue</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={[styles.modalButton, styles.abandonButton]}
-                            onPress={() => endStudySession('abandoned')}
-                            disabled={endingSession}
-                        >
-                            <Text style={styles.modalButtonTextWhite}>
-                                {endingSession ? 'Ending...' : 'Save & Exit'}
-                            </Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={[styles.modalButton, styles.completeButtonModal]}
-                            onPress={() => endStudySession('completed')}
-                            disabled={endingSession}
-                        >
-                            <Text style={styles.modalButtonTextWhite}>
-                                {endingSession ? 'Ending...' : 'Mark Complete'}
-                            </Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            </View>
-        </Modal>
-    );
 
     return (
         <SafeAreaView style={styles.container}>
             {renderSessionHeader()}
             {renderContentBody()}
-            {renderEndSessionModal()}
+            {renderSessionFooter()}
         </SafeAreaView>
     );
 };
@@ -581,22 +725,68 @@ const styles = StyleSheet.create({
     sessionHeader: {
         backgroundColor: '#fff',
         paddingHorizontal: 20,
-        paddingVertical: 16,
+        paddingTop: 8,
+        paddingBottom: 12,
         borderBottomWidth: 1,
         borderBottomColor: '#e0e0e0',
     },
     headerTop: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 16,
     },
     backButton: {
-        marginRight: 16,
         padding: 8,
     },
     backButtonText: {
-        fontSize: 24,
+        fontSize: 16,
         color: '#007AFF',
+        fontWeight: '600',
+    },
+    // Footer styles (moved from header) - Minimized to 1/3 size
+    sessionFooter: {
+        backgroundColor: '#fff',
+        paddingHorizontal: 12,
+        paddingTop: 6,
+        paddingBottom: 8,
+        borderTopWidth: 1,
+        borderTopColor: '#e0e0e0',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: -2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 3,
+        elevation: 3,
+    },
+    footerSessionInfo: {
+        marginBottom: 6,
+    },
+    footerTitleRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        marginBottom: 2,
+    },
+    footerSessionTitle: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#1a1a1a',
+        flex: 1,
+        marginRight: 8,
+    },
+    footerSessionSubtitle: {
+        fontSize: 10,
+        color: '#999',
+        marginBottom: 2,
+    },
+    footerAssignmentIndicator: {
+        fontSize: 9,
+        color: '#007AFF',
+        fontWeight: '600',
+        backgroundColor: '#E3F2FD',
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        borderRadius: 8,
+        alignSelf: 'flex-start',
+        marginTop: 2,
     },
     sessionInfo: {
         flex: 1,
@@ -616,42 +806,43 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     timerText: {
-        fontSize: 18,
-        fontWeight: 'bold',
+        fontSize: 11,
+        fontWeight: '600',
         color: '#1a1a1a',
-        marginBottom: 4,
+        marginBottom: 2,
     },
     statusIndicator: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
+        width: 5,
+        height: 5,
+        borderRadius: 2.5,
     },
     progressContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 16,
+        marginBottom: 6,
     },
     progressBar: {
         flex: 1,
-        height: 8,
+        height: 4,
         backgroundColor: '#e0e0e0',
-        borderRadius: 4,
-        marginRight: 12,
+        borderRadius: 2,
+        marginRight: 6,
     },
     progressFill: {
         height: '100%',
         backgroundColor: '#007AFF',
-        borderRadius: 4,
+        borderRadius: 2,
     },
     progressText: {
-        fontSize: 14,
-        color: '#666',
+        fontSize: 11,
+        color: '#1a1a1a',
         fontWeight: '600',
-        minWidth: 40,
+        minWidth: 30,
     },
     sessionControls: {
         flexDirection: 'row',
-        gap: 12,
+        gap: 6,
+        marginBottom: 0,
     },
     controlButton: {
         flex: 1,
@@ -671,9 +862,12 @@ const styles = StyleSheet.create({
         backgroundColor: '#28a745',
     },
     controlButtonText: {
-        fontSize: 14,
+        fontSize: 12,
         fontWeight: '600',
         color: '#fff',
+    },
+    pauseButtonText: {
+        color: '#333',
     },
     contentScrollView: {
         flex: 1,
@@ -862,28 +1056,206 @@ const styles = StyleSheet.create({
     },
     workflowSection: {
         backgroundColor: '#F8F9FA',
-        padding: 16,
-        borderRadius: 12,
-        marginVertical: 8,
+        padding: 8,
+        borderRadius: 8,
+        marginTop: 6,
         borderWidth: 1,
         borderColor: '#DEE2E6',
     },
     workflowTitle: {
-        fontSize: 16,
+        fontSize: 10,
         fontWeight: '600',
-        color: '#495057',
-        marginBottom: 12,
+        color: '#666',
+        marginBottom: 4,
     },
     workflowButton: {
         backgroundColor: '#007bff',
-        paddingVertical: 12,
-        paddingHorizontal: 20,
-        borderRadius: 8,
+        paddingVertical: 6,
+        paddingHorizontal: 12,
+        borderRadius: 6,
         alignItems: 'center',
     },
     workflowButtonText: {
         color: '#fff',
+        fontSize: 11,
+        fontWeight: '600',
+    },
+    // Resource styles
+    resourcesContainer: {
+        backgroundColor: '#fff',
+        borderRadius: 12,
+        padding: 20,
+        marginBottom: 16,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
+    },
+    resourcesSectionTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#1a1a1a',
+        marginBottom: 4,
+    },
+    resourcesSectionSubtitle: {
+        fontSize: 14,
+        color: '#666',
+        marginBottom: 16,
+    },
+    resourceCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#f8f9fa',
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#e0e0e0',
+    },
+    resourceIconContainer: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        backgroundColor: '#fff',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 12,
+    },
+    resourceIcon: {
+        fontSize: 24,
+    },
+    resourceInfo: {
+        flex: 1,
+        marginRight: 8,
+    },
+    resourceTitle: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#1a1a1a',
+        marginBottom: 4,
+        lineHeight: 20,
+    },
+    resourceQuery: {
+        fontSize: 12,
+        color: '#666',
+        fontStyle: 'italic',
+    },
+    resourceArrow: {
+        fontSize: 20,
+        color: '#007AFF',
+        fontWeight: 'bold',
+    },
+    // Video player styles
+    videoCard: {
+        backgroundColor: '#fff',
+        borderRadius: 16,
+        marginBottom: 16,
+        overflow: 'hidden',
+        borderWidth: 2,
+        borderColor: '#007AFF',
+        shadowColor: '#007AFF',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 8,
+        elevation: 5,
+    },
+    videoHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 16,
+        backgroundColor: '#f8f9fa',
+        borderBottomWidth: 1,
+        borderBottomColor: '#e0e0e0',
+    },
+    videoIconContainer: {
+        width: 52,
+        height: 52,
+        borderRadius: 26,
+        backgroundColor: '#007AFF',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 12,
+        shadowColor: '#007AFF',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.3,
+        shadowRadius: 4,
+        elevation: 3,
+    },
+    videoIcon: {
+        fontSize: 24,
+    },
+    videoInfo: {
+        flex: 1,
+        marginRight: 8,
+    },
+    videoTitle: {
         fontSize: 16,
+        fontWeight: '700',
+        color: '#1a1a1a',
+        marginBottom: 4,
+        lineHeight: 22,
+    },
+    videoQuery: {
+        fontSize: 12,
+        color: '#666',
+        fontStyle: 'italic',
+    },
+    videoToggleContainer: {
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        backgroundColor: '#007AFF',
+        borderRadius: 8,
+    },
+    videoToggleText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    videoPlayerContainer: {
+        backgroundColor: '#000',
+        padding: 12,
+    },
+    videoPlayerWrapper: {
+        width: '100%',
+        aspectRatio: 16 / 9,
+        borderRadius: 12,
+        overflow: 'hidden',
+        backgroundColor: '#000',
+        borderWidth: 2,
+        borderColor: '#007AFF',
+    },
+    videoPlayer: {
+        flex: 1,
+        backgroundColor: '#000',
+    },
+    videoQueryExpanded: {
+        fontSize: 13,
+        color: '#fff',
+        marginTop: 12,
+        paddingHorizontal: 4,
+        fontStyle: 'italic',
+    },
+    videoFallbackContainer: {
+        padding: 24,
+        alignItems: 'center',
+        backgroundColor: '#f8f9fa',
+    },
+    videoFallbackText: {
+        fontSize: 14,
+        color: '#666',
+        marginBottom: 12,
+        textAlign: 'center',
+    },
+    videoFallbackButton: {
+        paddingHorizontal: 20,
+        paddingVertical: 10,
+        backgroundColor: '#007AFF',
+        borderRadius: 8,
+    },
+    videoFallbackButtonText: {
+        color: '#fff',
+        fontSize: 14,
         fontWeight: '600',
     },
 });

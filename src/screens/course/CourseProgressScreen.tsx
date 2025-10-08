@@ -24,8 +24,13 @@ import {
     StudentProgress,
     StudySession,
     CourseWithLessons,
+    CourseWithBlocks,
     CourseLesson,
-    StudentAssignment
+    CourseBlock,
+    StudentAssignment,
+    CourseBlocksProgressResponse,
+    BlockAvailability,
+    AssignmentStatus
 } from '../../services/afterSchoolService';
 import { gradesService } from '../../services/gradesService';
 
@@ -44,12 +49,14 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
     const { token } = useAuth();
 
     const [progress, setProgress] = useState<StudentProgress | null>(null);
-    const [course, setCourse] = useState<CourseWithLessons | null>(null);
+    const [course, setCourse] = useState<CourseWithLessons | CourseWithBlocks | null>(null);
+    const [blocksProgress, setBlocksProgress] = useState<CourseBlocksProgressResponse | null>(null);
     const [sessions, setSessions] = useState<StudySession[]>([]);
     const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
+    const [assignmentStatuses, setAssignmentStatuses] = useState<Record<string, AssignmentStatus>>({});
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [activeTab, setActiveTab] = useState<'overview' | 'assignments' | 'sessions' | 'analytics'>('overview');
+    const [activeTab, setActiveTab] = useState<'overview' | 'assignments' | 'blocks' | 'analytics'>('overview');
 
     // Load progress data
     const loadProgressData = async (isRefresh: boolean = false) => {
@@ -61,17 +68,35 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
             }
 
             // Load progress and course data in parallel
-            const [progressData, courseData, assignmentsData] = await Promise.all([
+            const [progressData, courseData, assignmentsData, blocksProgressData] = await Promise.all([
                 afterSchoolService.getStudentProgress(courseId, token).catch(() => null),
                 afterSchoolService.getCourseDetails(courseId, token),
-                afterSchoolService.getCourseAssignments(courseId, token).catch(() => [])
+                afterSchoolService.getCourseAssignments(courseId, token).catch(() => []),
+                afterSchoolService.getCourseBlocksProgress(courseId, token).catch(() => null)
             ]);
 
             setProgress(progressData);
             setCourse(courseData);
             setAssignments(assignmentsData);
+            setBlocksProgress(blocksProgressData);
             // For now, use empty sessions array - in real app would fetch from appropriate service
             setSessions([]);
+
+            // Load assignment statuses for all assignments
+            if (assignmentsData.length > 0) {
+                const statuses: Record<string, AssignmentStatus> = {};
+                await Promise.all(
+                    assignmentsData.map(async (assignment) => {
+                        try {
+                            const status = await afterSchoolService.getAssignmentStatus(assignment.assignment_id, token);
+                            statuses[assignment.assignment_id] = status;
+                        } catch (error) {
+                            console.error(`Error loading status for assignment ${assignment.assignment_id}:`, error);
+                        }
+                    })
+                );
+                setAssignmentStatuses(statuses);
+            }
         } catch (error) {
             console.error('Error loading progress data:', error);
             Alert.alert(
@@ -115,6 +140,26 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
         });
     };
 
+    // Convert backend status to frontend status for compatibility
+    const mapBackendStatusToFrontend = (backendStatus: string, grade: number, canRetry: boolean) => {
+        switch (backendStatus) {
+            case 'passed':
+                return 'passed';
+            case 'needs_retry':
+                return canRetry ? 'failed_can_retry' : 'failed_no_retry';
+            case 'failed':
+                return 'failed_no_retry';
+            case 'submitted':
+            case 'graded':
+                // Check if passed based on grade
+                return grade >= 80 ? 'passed' : (canRetry ? 'failed_can_retry' : 'failed_no_retry');
+            case 'assigned':
+                return 'not_attempted';
+            default:
+                return 'not_attempted';
+        }
+    };
+
     // Continue workflow from progress screen
     const continueWorkflow = () => {
         const nextAssignment = assignments.find(a => a.status === 'assigned');
@@ -139,6 +184,20 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
     const getProgressPercentage = (): number => {
         if (!progress || progress.total_lessons === 0) return 0;
         return Math.round((progress.lessons_completed / progress.total_lessons) * 100);
+    };
+
+    // Calculate average score from graded assignments
+    const getAverageScore = (): number | null => {
+        if (!assignments || assignments.length === 0) return null;
+
+        const gradedAssignments = assignments.filter(a =>
+            a.status === 'graded' && a.grade !== undefined && a.grade !== null
+        );
+
+        if (gradedAssignments.length === 0) return null;
+
+        const totalScore = gradedAssignments.reduce((sum, a) => sum + (a.grade || 0), 0);
+        return Math.round(totalScore / gradedAssignments.length);
     };
 
     // Get achievement level
@@ -242,29 +301,32 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
 
                 {/* Progress Stats Grid */}
                 <View style={styles.statsGrid}>
-                    <View style={styles.statCard}>
+                    <View key="stat-lessons-completed" style={styles.statCard}>
                         <Text style={styles.statValue}>{progress.lessons_completed}</Text>
                         <Text style={styles.statLabel}>Lessons Completed</Text>
                     </View>
-                    <View style={styles.statCard}>
+                    <View key="stat-total-lessons" style={styles.statCard}>
                         <Text style={styles.statValue}>{progress.total_lessons}</Text>
                         <Text style={styles.statLabel}>Total Lessons</Text>
                     </View>
-                    <View style={styles.statCard}>
+                    <View key="stat-study-time" style={styles.statCard}>
                         <Text style={styles.statValue}>{formatDuration(progress.total_study_time)}</Text>
                         <Text style={styles.statLabel}>Study Time</Text>
                     </View>
-                    <View style={styles.statCard}>
+                    <View key="stat-average-score" style={styles.statCard}>
                         <Text style={styles.statValue}>
-                            {progress.average_score ? `${Math.round(progress.average_score)}%` : 'N/A'}
+                            {(() => {
+                                const avgScore = getAverageScore();
+                                return avgScore !== null ? `${avgScore}%` : 'N/A';
+                            })()}
                         </Text>
                         <Text style={styles.statLabel}>Average Score</Text>
                     </View>
-                    <View style={styles.statCard}>
+                    <View key="stat-sessions-count" style={styles.statCard}>
                         <Text style={styles.statValue}>{progress.sessions_count}</Text>
                         <Text style={styles.statLabel}>Study Sessions</Text>
                     </View>
-                    <View style={styles.statCard}>
+                    <View key="stat-streak" style={styles.statCard}>
                         <Text style={styles.statValue}>{studyStreak}</Text>
                         <Text style={styles.statLabel}>Day Streak</Text>
                     </View>
@@ -275,19 +337,19 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
                     <View style={styles.workflowCard}>
                         <Text style={styles.workflowTitle}>Assignment Workflow</Text>
                         <View style={styles.workflowStats}>
-                            <View style={styles.workflowStatItem}>
+                            <View key="workflow-pending" style={styles.workflowStatItem}>
                                 <Text style={styles.workflowStatValue}>
                                     {assignments.filter(a => a.status === 'assigned').length}
                                 </Text>
                                 <Text style={styles.workflowStatLabel}>Pending</Text>
                             </View>
-                            <View style={styles.workflowStatItem}>
+                            <View key="workflow-submitted" style={styles.workflowStatItem}>
                                 <Text style={styles.workflowStatValue}>
                                     {assignments.filter(a => a.status === 'submitted').length}
                                 </Text>
                                 <Text style={styles.workflowStatLabel}>Submitted</Text>
                             </View>
-                            <View style={styles.workflowStatItem}>
+                            <View key="workflow-graded" style={styles.workflowStatItem}>
                                 <Text style={styles.workflowStatValue}>
                                     {assignments.filter(a => a.status === 'graded').length}
                                 </Text>
@@ -412,6 +474,114 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
         );
     };
 
+    // Start or review a block using blocksProgress info (no legacy availability call)
+    const startBlock = (blockId: number) => {
+        try {
+            const block = blocksProgress?.blocks.find(b => b.block_id === blockId);
+            if (!block) return;
+
+            // Allow navigation if the block is available OR already completed (for review)
+            if (!block.is_available && !block.is_completed) {
+                Alert.alert(
+                    'Block Not Available',
+                    'Complete previous blocks to unlock this one.',
+                    [{ text: 'OK' }]
+                );
+                return;
+            }
+
+            navigation.navigate('StudySession', {
+                sessionId: Date.now(), // Temporary session ID
+                courseId,
+                blockId,
+                blockTitle: block.title,
+                courseTitle
+            });
+        } catch (error) {
+            console.error('Error starting block:', error);
+            Alert.alert('Error', 'Failed to open block. Please try again.', [{ text: 'OK' }]);
+        }
+    };
+
+    // Render blocks tab
+    const renderBlocksContent = () => {
+        if (!blocksProgress || blocksProgress.blocks.length === 0) {
+            return (
+                <View style={styles.emptyContainer}>
+                    <Text style={styles.emptyTitle}>No Blocks Available</Text>
+                    <Text style={styles.emptySubtitle}>Course blocks will appear here</Text>
+                </View>
+            );
+        }
+
+        return (
+            <View style={styles.contentContainer}>
+                <View style={styles.sectionHeader}>
+                    <Text style={styles.sectionTitle}>Course Blocks</Text>
+                    <Text style={styles.sectionSubtitle}>Complete blocks sequentially to unlock the next</Text>
+                </View>
+
+                {blocksProgress.blocks
+                    .sort((a, b) => (a.week * 100 + a.block_number) - (b.week * 100 + b.block_number))
+                    .map((block) => (
+                        <View key={block.block_id} style={[
+                            styles.assignmentCard,
+                            { opacity: !block.is_available && !block.is_completed ? 0.6 : 1 }
+                        ]}>
+                            <View style={styles.assignmentHeader}>
+                                <Text style={[
+                                    styles.assignmentTitle,
+                                    { color: !block.is_available ? '#6c757d' : '#212529' }
+                                ]}>
+                                    Block {block.week}.{block.block_number}: {block.title}
+                                </Text>
+                                <View style={[
+                                    styles.statusBadge,
+                                    {
+                                        backgroundColor: !block.is_available ? '#f8f9fa' :
+                                            block.is_completed ? '#e8f5e8' : '#fff3cd'
+                                    }
+                                ]}>
+                                    <Text style={[
+                                        styles.statusBadge,
+                                        {
+                                            color: (!block.is_available && !block.is_completed) ? '#6c757d' :
+                                                block.is_completed ? '#28a745' : '#856404',
+                                            backgroundColor: 'transparent'
+                                        }
+                                    ]}>
+                                        {(!block.is_available && !block.is_completed) ? '🔒 Locked' :
+                                            block.is_completed ? '✓ Complete' :
+                                                '📖 Available'}
+                                    </Text>
+                                </View>
+                            </View>
+
+                            {(!block.is_available && !block.is_completed) && (
+                                <Text style={styles.emptySubtext}>
+                                    Complete previous blocks to unlock this one
+                                </Text>
+                            )}
+
+                            {(block.is_available || block.is_completed) && (
+                                <View style={styles.assignmentActions}>
+                                    <TouchableOpacity
+                                        style={styles.continueButton}
+                                        onPress={() => startBlock(block.block_id)}
+                                    >
+                                        <Text style={styles.continueButtonText}>
+                                            {block.is_completed ? 'Review Block' : 'Start Block'}
+                                        </Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+                        </View>
+                    ))
+                }
+            </View>
+        );
+    };
+
     // Render assignments tab
     const renderAssignmentsContent = () => {
         if (assignments.length === 0) {
@@ -435,63 +605,114 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
                     <Text style={styles.sectionSubtitle}>Track your assignment progress</Text>
                 </View>
 
-                {assignments.map((assignment) => (
-                    <TouchableOpacity
-                        key={assignment.id}
-                        style={styles.assignmentCard}
-                        onPress={() => navigateToAssignment(assignment)}
-                    >
-                        <View style={styles.assignmentHeader}>
-                            <Text style={styles.assignmentTitle}>Assignment #{assignment.assignment_id}</Text>
-                            <View style={[
-                                styles.statusBadge,
-                                styles[`status${assignment.status.charAt(0).toUpperCase() + assignment.status.slice(1).replace('_', '')}`]
-                            ]}>
-                                <Text style={styles.statusText}>
-                                    {assignment.status.replace('_', ' ').toUpperCase()}
-                                </Text>
-                            </View>
-                        </View>
+                {assignments.map((assignment) => {
+                    const assignmentStatus = assignmentStatuses[assignment.assignment_id];
+                    const mappedStatus = assignmentStatus ? mapBackendStatusToFrontend(
+                        assignmentStatus.student_assignment.status,
+                        assignmentStatus.student_assignment.grade,
+                        assignmentStatus.attempts_info.can_retry
+                    ) : null;
 
-                        <View style={styles.assignmentDetails}>
-                            <Text style={styles.assignmentMeta}>
-                                Due: {new Date(assignment.due_date).toLocaleDateString()}
-                            </Text>
-                            {assignment.submitted_at && (
+                    return (
+                        <TouchableOpacity
+                            key={assignment.id}
+                            style={styles.assignmentCard}
+                            onPress={() => navigateToAssignment(assignment)}
+                        >
+                            <View style={styles.assignmentHeader}>
+                                <Text style={styles.assignmentTitle}>Assignment #{assignment.assignment_id}</Text>
+                                <View style={[
+                                    styles.statusBadge,
+                                    {
+                                        backgroundColor: mappedStatus === 'passed' ? '#e8f5e8' :
+                                            mappedStatus === 'failed_can_retry' ? '#fff3cd' :
+                                                mappedStatus === 'failed_no_retry' ? '#f8d7da' : '#f8f9fa'
+                                    }
+                                ]}>
+                                    <Text style={[
+                                        styles.statusText,
+                                        {
+                                            color: mappedStatus === 'passed' ? '#28a745' :
+                                                mappedStatus === 'failed_can_retry' ? '#856404' :
+                                                    mappedStatus === 'failed_no_retry' ? '#721c24' : '#6c757d'
+                                        }
+                                    ]}>
+                                        {mappedStatus === 'passed' ? '✓ PASSED' :
+                                            mappedStatus === 'failed_can_retry' ? '⚠️ CAN RETRY' :
+                                                mappedStatus === 'failed_no_retry' ? '✗ FAILED' :
+                                                    'NOT ATTEMPTED'}
+                                    </Text>
+                                </View>
+                            </View>
+
+                            <View style={styles.assignmentDetails}>
                                 <Text style={styles.assignmentMeta}>
-                                    Submitted: {new Date(assignment.submitted_at).toLocaleDateString()}
+                                    Due: {new Date(assignment.due_date).toLocaleDateString()}
+                                </Text>
+                                {assignment.submitted_at && (
+                                    <Text style={styles.assignmentMeta}>
+                                        Submitted: {new Date(assignment.submitted_at).toLocaleDateString()}
+                                    </Text>
+                                )}
+                                {assignmentStatus && (
+                                    <Text style={styles.assignmentMeta}>
+                                        Attempts: {assignmentStatus.attempts_info.attempts_used}/3
+                                    </Text>
+                                )}
+                            </View>
+
+                            {assignmentStatus?.student_assignment.grade !== undefined && (
+                                <View style={styles.gradeContainer}>
+                                    <Text style={styles.gradeLabel}>Score:</Text>
+                                    <Text style={[
+                                        styles.gradeValue,
+                                        {
+                                            color: assignmentStatus.student_assignment.grade >= 80 ? '#28a745' : '#dc3545'
+                                        }
+                                    ]}>{assignmentStatus.student_assignment.grade}%</Text>
+                                    {assignmentStatus.student_assignment.grade < 80 && (
+                                        <Text style={[styles.gradeLabel, { color: '#dc3545', fontSize: 12 }]}>
+                                            (Need 80% to pass)
+                                        </Text>
+                                    )}
+                                </View>
+                            )}
+
+                            {assignment.feedback && (
+                                <View style={styles.feedbackContainer}>
+                                    <Text style={styles.feedbackTitle}>Feedback:</Text>
+                                    <Text style={styles.feedbackText} numberOfLines={2}>
+                                        {assignment.feedback}
+                                    </Text>
+                                </View>
+                            )}
+
+                            {assignmentStatus?.message && !assignmentStatus.passing_grade && (
+                                <Text style={[styles.assignmentMeta, { color: '#856404', fontStyle: 'italic' }]}>
+                                    {assignmentStatus.message}
                                 </Text>
                             )}
-                        </View>
 
-                        {assignment.grade !== undefined && (
-                            <View style={styles.gradeContainer}>
-                                <Text style={styles.gradeLabel}>Grade:</Text>
-                                <Text style={styles.gradeValue}>{assignment.grade}%</Text>
+                            <View style={styles.assignmentActions}>
+                                <TouchableOpacity
+                                    style={[
+                                        styles.continueButton,
+                                        mappedStatus === 'failed_no_retry' && { opacity: 0.6 }
+                                    ]}
+                                    onPress={() => navigateToAssignment(assignment)}
+                                    disabled={mappedStatus === 'failed_no_retry'}
+                                >
+                                    <Text style={styles.continueButtonText}>
+                                        {mappedStatus === 'not_attempted' ? 'Start Assignment' :
+                                            mappedStatus === 'failed_can_retry' ? 'Retry Assignment' :
+                                                mappedStatus === 'failed_no_retry' ? 'Max Attempts Reached' :
+                                                    'View Assignment'}
+                                    </Text>
+                                </TouchableOpacity>
                             </View>
-                        )}
-
-                        {assignment.feedback && (
-                            <View style={styles.feedbackContainer}>
-                                <Text style={styles.feedbackTitle}>Feedback:</Text>
-                                <Text style={styles.feedbackText} numberOfLines={2}>
-                                    {assignment.feedback}
-                                </Text>
-                            </View>
-                        )}
-
-                        <View style={styles.assignmentActions}>
-                            <TouchableOpacity
-                                style={[styles.actionButton, styles.primaryButton]}
-                                onPress={() => navigateToAssignment(assignment)}
-                            >
-                                <Text style={styles.primaryButtonText}>
-                                    {assignment.status === 'assigned' ? 'Start Assignment' : 'View Details'}
-                                </Text>
-                            </TouchableOpacity>
-                        </View>
-                    </TouchableOpacity>
-                ))}
+                        </TouchableOpacity>
+                    );
+                })}
 
                 {assignments.some(a => a.status === 'assigned') && (
                     <TouchableOpacity style={styles.continueButton} onPress={continueWorkflow}>
@@ -593,11 +814,11 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
                 </Text>
             </TouchableOpacity>
             <TouchableOpacity
-                style={[styles.tab, activeTab === 'sessions' && styles.activeTab]}
-                onPress={() => setActiveTab('sessions')}
+                style={[styles.tab, activeTab === 'blocks' && styles.activeTab]}
+                onPress={() => setActiveTab('blocks')}
             >
-                <Text style={[styles.tabText, activeTab === 'sessions' && styles.activeTabText]}>
-                    Sessions ({sessions.length})
+                <Text style={[styles.tabText, activeTab === 'blocks' && styles.activeTabText]}>
+                    Blocks ({blocksProgress?.blocks.length || 0})
                 </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -638,7 +859,7 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
             >
                 {activeTab === 'overview' && renderProgressOverview()}
                 {activeTab === 'assignments' && renderAssignmentsContent()}
-                {activeTab === 'sessions' && renderSessionsContent()}
+                {activeTab === 'blocks' && renderBlocksContent()}
                 {activeTab === 'analytics' && renderAnalyticsContent()}
             </ScrollView>
         </SafeAreaView>

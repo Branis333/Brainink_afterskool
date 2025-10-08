@@ -49,8 +49,9 @@ export type RootStackParamList = {
     StudySession: {
         sessionId: number;
         courseId: number;
-        lessonId: number;
-        lessonTitle: string;
+        lessonId?: number;
+        blockId?: number;
+        lessonTitle?: string;
         courseTitle: string;
     };
     // Many screens navigate using both 'CourseAssignments' and 'CourseAssignment'.
@@ -93,6 +94,8 @@ export type RootStackParamList = {
         courseId?: number;
         assignmentId?: number;
         sessionId?: number;
+        lessonId?: number; // optional anchor for uploads context
+        blockId?: number;  // optional anchor for uploads context
         submissionType?: 'homework' | 'quiz' | 'practice' | 'assessment';
     };
     UploadsManagement: undefined;

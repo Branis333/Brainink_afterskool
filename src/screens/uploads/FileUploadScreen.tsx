@@ -20,7 +20,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../navigation/AppNavigatorNew';
-import { uploadsService, UploadFile, AISubmission } from '../../services/uploadsService';
+import { uploadsService, UploadFile } from '../../services/uploadsService';
 import { useAuth } from '../../context/AuthContext';
 
 // For React Native, we'll simulate file picker functionality
@@ -38,7 +38,7 @@ interface UploadProgress {
 export const FileUploadScreen: React.FC<Props> = ({ navigation, route }) => {
     const { token, user } = useAuth();
     const [selectedFile, setSelectedFile] = useState<UploadFile | null>(null);
-    const [sessionId, setSessionId] = useState<string>('');
+    const [sessionId, setSessionId] = useState<string>(''); // deprecated: no longer used
     const [submissionType, setSubmissionType] = useState<'homework' | 'quiz' | 'practice' | 'assessment'>('homework');
     const [uploadProgress, setUploadProgress] = useState<UploadProgress>({
         progress: 0,
@@ -50,7 +50,7 @@ export const FileUploadScreen: React.FC<Props> = ({ navigation, route }) => {
 
     const screenWidth = Dimensions.get('window').width;
 
-    // Pre-fill session ID if provided from navigation
+    // Pre-fill (deprecated) session ID if provided from navigation
     useEffect(() => {
         if (route.params?.sessionId) {
             setSessionId(route.params.sessionId.toString());
@@ -108,11 +108,6 @@ export const FileUploadScreen: React.FC<Props> = ({ navigation, route }) => {
             return;
         }
 
-        if (!sessionId.trim()) {
-            Alert.alert('Error', 'Please enter a session ID');
-            return;
-        }
-
         if (!token) {
             Alert.alert('Error', 'Authentication required');
             return;
@@ -122,73 +117,26 @@ export const FileUploadScreen: React.FC<Props> = ({ navigation, route }) => {
             setIsLoading(true);
             setUploadProgress({
                 progress: 10,
-                status: 'uploading',
-                message: 'Starting upload...',
+                status: 'uploading', // will redirect to bulk flow
+                message: 'Redirecting to Bulk Upload (single-file deprecated)...',
             });
 
-            // Simulate upload progress
-            const progressInterval = setInterval(() => {
-                setUploadProgress(prev => {
-                    if (prev.progress < 90) {
-                        return {
-                            ...prev,
-                            progress: prev.progress + 10,
-                            message: `Uploading... ${prev.progress + 10}%`,
-                        };
-                    }
-                    return prev;
-                });
-            }, 500);
-
-            // Perform the actual upload
-            const result = await uploadsService.uploadSingleFile(
-                parseInt(sessionId),
-                selectedFile,
-                submissionType,
-                token
+            // Inform user and redirect to Bulk Upload screen using the new session-less flow
+            Alert.alert(
+                'Single-file upload is deprecated',
+                'We now use the Bulk Upload flow (even for one image). You will be redirected.',
+                [
+                    {
+                        text: 'Go to Bulk Upload',
+                        onPress: () => navigation.navigate('BulkUpload', {
+                            courseId: route.params?.courseId,
+                            assignmentId: route.params?.assignmentId,
+                            submissionType,
+                        }),
+                    },
+                    { text: 'Cancel', style: 'cancel' },
+                ]
             );
-
-            clearInterval(progressInterval);
-
-            setUploadProgress({
-                progress: 100,
-                status: 'processing',
-                message: 'Processing with AI...',
-            });
-
-            // Simulate AI processing delay
-            setTimeout(() => {
-                setUploadProgress({
-                    progress: 100,
-                    status: 'completed',
-                    message: 'Upload completed successfully!',
-                });
-
-                Alert.alert(
-                    'Success',
-                    'File uploaded successfully and is being processed by AI.',
-                    [
-                        {
-                            text: 'View Details',
-                            onPress: () => navigation.navigate('GradeDetails', {
-                                submissionId: result.id,
-                                submissionType: result.submission_type as any,
-                            }),
-                        },
-                        {
-                            text: 'Upload Another',
-                            onPress: () => {
-                                removeSelectedFile();
-                                setSessionId('');
-                            },
-                        },
-                        {
-                            text: 'Go to Overview',
-                            onPress: () => navigation.navigate('UploadsOverview'),
-                        },
-                    ]
-                );
-            }, 2000);
 
         } catch (error) {
             console.error('Upload error:', error);
@@ -249,24 +197,24 @@ export const FileUploadScreen: React.FC<Props> = ({ navigation, route }) => {
                     >
                         <Text style={styles.backButtonText}>← Back</Text>
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Upload File</Text>
+                    <Text style={styles.headerTitle}>Upload File (Deprecated)</Text>
                     <Text style={styles.headerSubtitle}>
-                        Upload a single file for AI processing and grading
+                        This single-file screen is deprecated. Use Bulk Upload for the new images-to-PDF flow.
                     </Text>
                 </View>
 
                 {/* Upload Form */}
                 <View style={styles.form}>
-                    {/* Session ID Input */}
+                    {/* Deprecated: Session ID (no longer required) */}
                     <View style={styles.inputGroup}>
-                        <Text style={styles.inputLabel}>Session ID *</Text>
+                        <Text style={styles.inputLabel}>Session ID (deprecated - ignored)</Text>
                         <TextInput
                             style={styles.textInput}
                             value={sessionId}
                             onChangeText={setSessionId}
-                            placeholder="Enter session ID"
+                            placeholder="Deprecated — no longer needed"
                             keyboardType="numeric"
-                            editable={uploadProgress.status === 'idle' || uploadProgress.status === 'error'}
+                            editable={false}
                         />
                     </View>
 
@@ -383,14 +331,13 @@ export const FileUploadScreen: React.FC<Props> = ({ navigation, route }) => {
                     <TouchableOpacity
                         style={[
                             styles.uploadButton,
-                            (!selectedFile || !sessionId.trim() || uploadProgress.status === 'uploading' || uploadProgress.status === 'processing') &&
+                            (!selectedFile || uploadProgress.status === 'uploading' || uploadProgress.status === 'processing') &&
                             styles.uploadButtonDisabled,
                         ]}
                         onPress={handleUpload}
                         activeOpacity={0.7}
                         disabled={
                             !selectedFile ||
-                            !sessionId.trim() ||
                             uploadProgress.status === 'uploading' ||
                             uploadProgress.status === 'processing' ||
                             isLoading
@@ -400,7 +347,7 @@ export const FileUploadScreen: React.FC<Props> = ({ navigation, route }) => {
                             <ActivityIndicator color="#FFFFFF" />
                         ) : (
                             <Text style={styles.uploadButtonText}>
-                                {uploadProgress.status === 'completed' ? 'Upload Another File' : 'Upload File'}
+                                {uploadProgress.status === 'completed' ? 'Open Bulk Upload' : 'Open Bulk Upload'}
                             </Text>
                         )}
                     </TouchableOpacity>

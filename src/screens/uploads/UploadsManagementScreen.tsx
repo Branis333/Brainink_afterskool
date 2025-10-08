@@ -332,7 +332,9 @@ export const UploadsManagementScreen: React.FC<Props> = ({ navigation }) => {
                             {item.original_filename || `Submission ${item.id}`}
                         </Text>
                         <Text style={styles.submissionMeta}>
-                            {uploadsService.getSubmissionTypeDisplayName(item.submission_type)} • Session {item.session_id} • {formatTimeAgo(item.submitted_at)}
+                            {uploadsService.getSubmissionTypeDisplayName(item.submission_type)}
+                            {item.block_id ? ` • Block ${item.block_id}` : item.lesson_id ? ` • Lesson ${item.lesson_id}` : ''}
+                            {' '}• {formatTimeAgo(item.submitted_at)}
                         </Text>
                     </View>
                 </View>

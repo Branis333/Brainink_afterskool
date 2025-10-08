@@ -362,10 +362,7 @@ export const GradeHistoryScreen: React.FC = () => {
                         {grade.courseName} • {grade.lessonTitle}
                     </Text>
                     <Text style={styles.gradeTime}>
-                        {new Date(grade.submitted_at).toLocaleTimeString('en-US', {
-                            hour: '2-digit',
-                            minute: '2-digit'
-                        })}
+                        {gradesService.formatRelativeTime(grade.submitted_at)}
                     </Text>
                 </View>
             </View>

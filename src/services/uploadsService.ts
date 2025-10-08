@@ -1,6 +1,10 @@
 /**
  * Uploads Service for React Native
  * Handles file uploads, PDF generation, submission management, and AI processing
+ * Canonical flow (mark-done, session-less):
+ *   - Use bulkUploadImagesToPDF({ course_id, files, submission_type, lesson_id | block_id, assignment_id? })
+ *   - Do NOT send session_id; backend accepts lesson/block context directly.
+ *   - Single-file upload endpoint is deprecated and not supported by backend.
  * Based on BrainInk Backend after-school uploads endpoints
  */
 
@@ -26,7 +30,7 @@ export interface AISubmission {
     course_id: number;
     lesson_id?: number;  // Made optional for block-based submissions
     block_id?: number;   // New: for AI-generated course blocks
-    session_id: number;
+    session_id?: number;  // Made optional since we switched to mark done approach
     assignment_id?: number;  // New: link to assignment for the workflow
     submission_type: string;
     original_filename?: string;
@@ -55,13 +59,17 @@ export interface UploadFile {
     size?: number;
 }
 
-// Bulk PDF Upload Interfaces (Updated to match backend form data structure)
+// Bulk PDF Upload Interfaces (Updated to work with block/lesson directly)
 export interface BulkPDFUploadRequest {
-    session_id: number;
+    course_id: number;
     submission_type: 'homework' | 'quiz' | 'practice' | 'assessment';
     files: UploadFile[];
     storage_mode?: 'database';
     skip_db?: boolean;
+    // Either lesson_id or block_id must be provided
+    lesson_id?: number;
+    block_id?: number;
+    assignment_id?: number;
 }
 
 // Image Data Interface for bulk PDF creation 
@@ -105,7 +113,7 @@ export interface AISubmissionCreate {
     course_id: number;
     lesson_id?: number;  // Made optional for block-based submissions
     block_id?: number;   // New: for AI-generated course blocks
-    session_id: number;
+    session_id?: number;  // Made optional since we switched to mark done approach
     assignment_id?: number;  // New: link to assignment for workflow
     submission_type: 'homework' | 'quiz' | 'practice' | 'assessment';
 }
@@ -327,7 +335,7 @@ class UploadsService {
      */
     async bulkUploadImagesToPDF(uploadRequest: BulkPDFUploadRequest, token: string): Promise<BulkPDFUploadResponse> {
         try {
-            console.log('📤 Starting bulk PDF upload for session:', uploadRequest.session_id);
+            console.log('📤 Starting bulk PDF upload for course:', uploadRequest.course_id);
 
             // Validate the upload request
             const validation = this.validateBulkUploadRequest(uploadRequest);
@@ -337,7 +345,7 @@ class UploadsService {
 
             // Create FormData for multipart upload
             const formData = new FormData();
-            formData.append('session_id', uploadRequest.session_id.toString());
+            formData.append('course_id', uploadRequest.course_id.toString());
             formData.append('submission_type', uploadRequest.submission_type);
 
             if (uploadRequest.storage_mode) {
@@ -347,6 +355,11 @@ class UploadsService {
             if (uploadRequest.skip_db !== undefined) {
                 formData.append('skip_db', uploadRequest.skip_db.toString());
             }
+
+            // Include lesson or block context (one must be provided)
+            if (uploadRequest.lesson_id) formData.append('lesson_id', uploadRequest.lesson_id.toString());
+            if (uploadRequest.block_id) formData.append('block_id', uploadRequest.block_id.toString());
+            if (uploadRequest.assignment_id) formData.append('assignment_id', uploadRequest.assignment_id.toString());
 
             // Add files to FormData (React Native compatible)
             uploadRequest.files.forEach((file, index) => {
@@ -377,8 +390,12 @@ class UploadsService {
      * Validate bulk upload request
      */
     private validateBulkUploadRequest(request: BulkPDFUploadRequest): FileValidationResult {
-        if (!request.session_id || request.session_id <= 0) {
-            return { valid: false, error: 'Valid session ID is required' };
+        if (!request.course_id || request.course_id <= 0) {
+            return { valid: false, error: 'Valid course ID is required' };
+        }
+
+        if (!request.lesson_id && !request.block_id) {
+            return { valid: false, error: 'Either lesson_id or block_id must be provided' };
         }
 
         const allowedTypes = ['homework', 'quiz', 'practice', 'assessment'];
@@ -576,50 +593,7 @@ class UploadsService {
         }
     }
 
-    // ===============================
-    // SINGLE FILE UPLOAD METHODS
-    // ===============================
-
-    /**
-     * Upload a single file for a submission
-     */
-    async uploadSingleFile(
-        sessionId: number,
-        file: UploadFile,
-        submissionType: 'homework' | 'quiz' | 'practice' | 'assessment',
-        token: string
-    ): Promise<AISubmission> {
-        try {
-            console.log('📤 Uploading single file for session:', sessionId);
-
-            // Validate file
-            const validation = this.validateFile(file);
-            if (!validation.valid) {
-                throw new Error(validation.error);
-            }
-
-            // Create FormData for file upload
-            const formData = new FormData();
-            formData.append('session_id', sessionId.toString());
-            formData.append('submission_type', submissionType);
-
-            const blob = new Blob([file.uri], { type: file.type });
-            formData.append('file', blob, file.name);
-
-            const response = await this.makeMultipartRequest(
-                '/after-school/uploads/single-file',
-                token,
-                formData
-            );
-
-            const data = await response.json();
-            console.log('✅ Single file uploaded successfully');
-            return data;
-        } catch (error) {
-            console.error('❌ Error uploading single file:', error);
-            throw error;
-        }
-    }
+    // Note: Single-file upload method removed. Use bulkUploadImagesToPDF instead.
 
     // ===============================
     // SERVICE HEALTH AND UTILITIES
@@ -654,11 +628,12 @@ class UploadsService {
      * This is the core method for the workflow: "upload pictures that turn into PDF and automatically start grading"
      */
     async uploadImagesForAssignmentWorkflow(
-        sessionId: number,
+        courseId: number,
         assignmentId: number,
         images: UploadFile[],
         token: string,
-        submissionType: 'homework' | 'quiz' | 'practice' | 'assessment' = 'homework'
+        submissionType: 'homework' | 'quiz' | 'practice' | 'assessment' = 'homework',
+        context?: { lesson_id?: number; block_id?: number }
     ): Promise<{
         pdf_submission: BulkPDFUploadResponse;
         ai_processing: AIProcessingResults;
@@ -666,7 +641,7 @@ class UploadsService {
     }> {
         try {
             console.log('🚀 Starting complete assignment workflow with images');
-            console.log('📊 Session ID:', sessionId, 'Assignment ID:', assignmentId, 'Images:', images.length);
+            console.log('📊 Course ID:', courseId, 'Assignment ID:', assignmentId, 'Images:', images.length);
 
             // Step 1: Validate images for the workflow
             const validation = this.validateBulkFiles(images);
@@ -677,11 +652,14 @@ class UploadsService {
             // Step 2: Upload images and convert to PDF
             console.log('📸 Step 2: Converting images to PDF...');
             const bulkUploadRequest: BulkPDFUploadRequest = {
-                session_id: sessionId,
+                course_id: courseId,
                 submission_type: submissionType,
                 files: images,
                 storage_mode: 'database',
-                skip_db: false  // We want to store in database for the workflow
+                skip_db: false, // We want to store in database for the workflow
+                assignment_id: assignmentId,
+                lesson_id: context?.lesson_id,
+                block_id: context?.block_id
             };
 
             const pdfSubmission = await this.bulkUploadImagesToPDF(bulkUploadRequest, token);
@@ -792,11 +770,11 @@ class UploadsService {
     /**
      * Generate unique filename for upload
      */
-    generateUniqueFilename(originalFilename: string, userId: number, sessionId: number): string {
+    generateUniqueFilename(originalFilename: string, userId: number, contextId: number): string {
         const extension = this.getFileExtension(originalFilename);
         const timestamp = Date.now();
         const randomString = Math.random().toString(36).substring(2, 8);
-        return `session_${sessionId}_user_${userId}_${timestamp}_${randomString}${extension}`;
+        return `ctx_${contextId}_user_${userId}_${timestamp}_${randomString}${extension}`;
     }
 
     /**
@@ -894,7 +872,7 @@ class UploadsService {
     }
 
     /**
-     * Get user's recent submissions across all sessions
+     * Get user's recent submissions (mark-done model)
      */
     async getUserRecentSubmissions(token: string, limit: number = 10): Promise<AISubmission[]> {
         try {

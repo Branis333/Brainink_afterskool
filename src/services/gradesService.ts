@@ -52,6 +52,9 @@ export interface StudentProgress {
     lessons_completed: number;
     total_lessons: number;
     completion_percentage: number;
+    // Added for block-based progress tracking
+    blocks_completed?: number;
+    total_blocks?: number;
     average_score?: number;
     total_study_time: number;
     sessions_count: number;
@@ -67,8 +70,10 @@ export interface AISubmission {
     id: number;
     user_id: number;
     course_id: number;
-    lesson_id: number;
-    session_id: number;
+    lesson_id?: number;  // Optional to support block-based sessions
+    block_id?: number;   // Optional: AI-generated course blocks
+    session_id?: number; // Optional in mark-done model
+    assignment_id?: number; // Optional: link to assignment when applicable
     submission_type: 'homework' | 'quiz' | 'practice' | 'assessment';
     original_filename?: string;
     file_path?: string;
@@ -99,31 +104,85 @@ export interface LearningAnalytics {
     sessions_per_day: number;
 }
 
+export interface NormalizedAIResponse {
+    ai_score?: number | null;
+    ai_feedback?: string | null;
+    ai_strengths?: string | null;
+    ai_improvements?: string | null;
+    ai_corrections?: string | null;
+    raw?: Record<string, unknown>;
+}
+
 // KANA AI Grading Interfaces
 export interface KANAGradingRequest {
     course_id: number;
     lesson_id?: number;
+    block_id?: number;
+    assignment_id?: number;
     student_ids?: number[];
     grade_all_students?: boolean;
 }
 
 export interface KANAGradingResult {
-    submission_id: number;
+    submission_id?: number;
+    user_id?: number;
     student_name: string;
-    score: number;
-    feedback: string;
-    strengths?: string;
-    improvements?: string;
-    corrections?: string;
+    score?: number | null;
+    percentage?: number | null;
+    grade_letter?: string | null;
+    feedback?: string | null;
+    overall_feedback?: string | null;
+    strengths?: string[] | string | null;
+    improvements?: string[] | string | null;
+    recommendations?: string[] | string | null;
+    corrections?: string[] | string | null;
+    graded_by?: string | null;
+    normalized?: NormalizedAIResponse;
+    success: boolean;
+    error?: string;
 }
 
 export interface BulkGradingResponse {
-    success: boolean;
+    status: string;
     message: string;
+    grading_service: string;
+    course: {
+        id: number;
+        title: string;
+        description?: string | null;
+        subject?: string | null;
+    };
+    content_context: {
+        assignment?: {
+            id: number;
+            title: string;
+            description?: string | null;
+        } | null;
+        lesson?: {
+            id: number;
+            title: string;
+            learning_objectives?: string | string[] | null;
+        } | null;
+        block?: {
+            id: number;
+            title: string;
+            week: number;
+            block_number: number;
+        } | null;
+    };
+    grading_results: KANAGradingResult[];
+    batch_summary: {
+        total_submissions: number;
+        successfully_graded: number;
+        failed_grades: number;
+        success_rate: number;
+        average_score?: number | null;
+        grade_distribution?: Record<string, number>;
+    };
     total_submissions: number;
-    graded_count: number;
-    failed_count: number;
-    results: KANAGradingResult[];
+    submissions_graded: number;
+    submissions_failed: number;
+    processed_at: string;
 }
 
 // Pending Submissions Interfaces
@@ -174,7 +233,7 @@ export interface StudentAssignment {
     assigned_at: string;
     due_date: string;
     submitted_at?: string;
-    status: 'assigned' | 'submitted' | 'graded' | 'overdue';
+    status: 'assigned' | 'submitted' | 'graded' | 'overdue' | 'passed' | 'needs_retry' | 'failed';
     submission_file_path?: string;
     submission_content?: string;
     grade?: number;
@@ -187,19 +246,96 @@ export interface StudentAssignment {
 
 // Auto-Grading Response (Enhanced for the workflow)
 export interface AutoGradingResponse {
-    submission: StudentAssignment;
-    grading_results: {
-        submission_id: number;
-        ai_score: number;
-        ai_feedback: string;
-        ai_corrections?: string;
-        ai_strengths?: string;
-        ai_improvements?: string;
-        processed_at: string;
+    status: string;
+    message: string;
+    assignment: {
+        id: number;
+        title: string;
+        type: string;
+    };
+    grade_result: {
+        score?: number | null;
+        percentage?: number | null;
+        grade_letter?: string | null;
+        overall_feedback?: string | null;
+        detailed_feedback?: string | null;
+        strengths?: string[] | string | null;
+        improvements?: string[] | string | null;
+        recommendations?: string[] | string | null;
+        normalized?: NormalizedAIResponse;
+        passing_grade: boolean;
+        required_percentage: number;
+    };
+    student_assignment: {
+        id: number;
+        status: 'assigned' | 'submitted' | 'graded' | 'overdue' | 'passed' | 'needs_retry' | 'failed';
+        grade: number | null;
+        submitted_at: string;
+        graded_by: string;
+        can_retry: boolean;
+        attempts_remaining: number;
+    };
+    processed_at: string;
+    retry_info?: {
+        is_retry_attempt: boolean;
+        attempts_used: number;
+        attempts_remaining: number;
     };
 }
 
+export interface ProcessSubmissionResponse {
+    status: string;
+    message: string;
+    submission_id: number;
+    grade_result: {
+        score?: number | null;
+        percentage?: number | null;
+        grade_letter?: string | null;
+        overall_feedback?: string | null;
+        detailed_feedback?: string | null;
+        strengths?: string[] | string | null;
+        improvements?: string[] | string | null;
+        recommendations?: string[] | string | null;
+        corrections?: string[] | string | null;
+        graded_by?: string | null;
+        normalized?: NormalizedAIResponse;
+        [key: string]: unknown;
+    };
+    processing_details: {
+        assignment_title: string;
+        rubric_used?: string | null;
+        max_points: number;
+        processed_by: string;
+    };
+    processed_at: string;
+}
+
 class GradesService {
+    /**
+     * Format a timestamp into a friendly relative string like
+     * "Just now", "5 min ago", "2h ago", "Yesterday", or a date.
+     * Helps avoid timezone confusion (e.g., showing "2 hours ago" incorrectly).
+     */
+    formatRelativeTime(dateStr?: string): string {
+        if (!dateStr) return '';
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return '';
+
+        const now = new Date();
+        const diffMs = now.getTime() - d.getTime();
+        const diffSec = Math.round(diffMs / 1000);
+        const diffMin = Math.round(diffSec / 60);
+        const diffHr = Math.round(diffMin / 60);
+        const diffDay = Math.round(diffHr / 24);
+
+        if (diffSec < 30) return 'Just now';
+        if (diffMin < 1) return `${diffSec}s ago`;
+        if (diffMin < 60) return `${diffMin} min ago`;
+        if (diffHr < 24) return `${diffHr}h ago`;
+        if (diffDay === 1) return 'Yesterday';
+        if (diffDay < 7) return `${diffDay}d ago`;
+        return d.toLocaleDateString();
+    }
     private async makeAuthenticatedRequest(
         endpoint: string,
         token: string,
@@ -241,10 +377,12 @@ class GradesService {
     // ===============================
 
     /**
-     * Start a new study session for a lesson
+     * [DEPRECATED] Start a new study session for a lesson.
+     * Use mark-done flow instead (see afterSchoolService.markStudySessionDone / blocks availability).
      */
     async startStudySession(sessionData: StudySessionStart, token: string): Promise<StudySession> {
         try {
+            console.warn('[DEPRECATED] startStudySession is legacy. Prefer mark-done workflows.');
             console.log('▶️ Starting study session:', sessionData);
             const response = await this.makeAuthenticatedRequest(
                 '/after-school/sessions/start',
@@ -263,10 +401,12 @@ class GradesService {
     }
 
     /**
-     * End a study session and record completion
+     * [DEPRECATED] End a study session and record completion.
+     * In the mark-done model, explicit end is not required.
      */
     async endStudySession(sessionId: number, sessionData: StudySessionEnd, token: string): Promise<StudySession> {
         try {
+            console.warn('[DEPRECATED] endStudySession is legacy. Prefer mark-done workflows.');
             console.log('⏹️ Ending study session:', sessionId);
             const response = await this.makeAuthenticatedRequest(
                 `/after-school/sessions/${sessionId}/end`,
@@ -285,10 +425,12 @@ class GradesService {
     }
 
     /**
-     * Get user's study sessions with filtering
+     * [DEPRECATED] Get user's study sessions with filtering.
+     * Sessions are legacy; use progress endpoints and uploads where possible.
      */
     async getUserSessions(token: string, filters: SessionFilters = {}): Promise<StudySession[]> {
         try {
+            console.warn('[DEPRECATED] getUserSessions is legacy. Prefer block progress and uploads.');
             console.log('📋 Fetching user sessions with filters:', filters);
 
             // Build query parameters
@@ -314,10 +456,11 @@ class GradesService {
     }
 
     /**
-     * Get specific study session details
+     * [DEPRECATED] Get specific study session details.
      */
     async getSessionDetails(sessionId: number, token: string): Promise<StudySession> {
         try {
+            console.warn('[DEPRECATED] getSessionDetails is legacy. Prefer mark-done workflows.');
             console.log('📖 Fetching session details:', sessionId);
             const response = await this.makeAuthenticatedRequest(
                 `/after-school/sessions/${sessionId}`,
@@ -342,24 +485,13 @@ class GradesService {
      */
     async getStudentProgress(token: string, filters: ProgressFilters = {}): Promise<StudentProgress[]> {
         try {
-            console.log('📊 Fetching student progress with filters:', filters);
-
-            // Build query parameters
-            const params = new URLSearchParams();
-            Object.entries(filters).forEach(([key, value]) => {
-                if (value !== undefined && value !== null) {
-                    params.append(key, value.toString());
-                }
-            });
-
-            const queryString = params.toString();
-            const endpoint = `/after-school/sessions/progress${queryString ? `?${queryString}` : ''}`;
-
-            const response = await this.makeAuthenticatedRequest(endpoint, token);
-            const data = await response.json();
-
-            console.log('✅ Student progress fetched successfully:', data.length, 'records');
-            return data;
+            console.log('📊 Fetching student progress (mark-done) with filters:', filters);
+            if (filters.course_id) {
+                const record = await this.getCourseProgress(filters.course_id, token);
+                return [record];
+            }
+            console.warn('getStudentProgress without course_id is deprecated; returning empty list. Use getCourseProgress(courseId).');
+            return [];
         } catch (error) {
             console.error('❌ Error fetching student progress:', error);
             throw error;
@@ -373,7 +505,7 @@ class GradesService {
         try {
             console.log('📊 Fetching course progress for course ID:', courseId);
             const response = await this.makeAuthenticatedRequest(
-                `/after-school/sessions/progress/${courseId}`,
+                `/after-school/courses/${courseId}/progress`,
                 token
             );
 
@@ -431,8 +563,12 @@ class GradesService {
                 gradingRequest
             );
 
-            const data = await response.json();
-            console.log('✅ KANA AI grading completed successfully');
+            const data = await response.json() as BulkGradingResponse;
+            console.log(
+                '✅ KANA AI grading completed successfully',
+                `graded=${data.batch_summary?.successfully_graded ?? 0}`,
+                `failed=${data.batch_summary?.failed_grades ?? 0}`
+            );
             return data;
         } catch (error) {
             console.error('❌ Error in KANA AI grading:', error);
@@ -480,61 +616,23 @@ class GradesService {
     /**
      * Create a new AI submission for grading
      */
-    async createAISubmission(submissionData: {
-        course_id: number;
-        lesson_id: number;
-        session_id: number;
-        submission_type: 'homework' | 'quiz' | 'practice' | 'assessment';
-    }, token: string): Promise<AISubmission> {
-        try {
-            console.log('📤 Creating AI submission:', submissionData);
-            const response = await this.makeAuthenticatedRequest(
-                '/after-school/submissions/',
-                token,
-                'POST',
-                submissionData
-            );
-
-            const data = await response.json();
-            console.log('✅ AI submission created successfully:', data.id);
-            return data;
-        } catch (error) {
-            console.error('❌ Error creating AI submission:', error);
-            throw error;
-        }
+    /**
+     * [DEPRECATED] Creating submissions directly is no longer supported.
+     * Use uploadsService.uploadImagesForAssignmentWorkflow (bulk-upload-to-pdf) instead.
+     */
+    async createAISubmission(): Promise<AISubmission> {
+        throw new Error('createAISubmission is deprecated. Use uploadsService.uploadImagesForAssignmentWorkflow instead.');
     }
 
     /**
      * Upload a file for AI submission and grading
      */
-    async uploadSubmissionFile(submissionId: number, fileData: FormData, token: string): Promise<AISubmission> {
-        try {
-            console.log('📤 Uploading file for submission:', submissionId);
-
-            const headers: HeadersInit = {
-                'Authorization': `Bearer ${token}`
-                // Don't set Content-Type for FormData, let the browser set it with boundary
-            };
-
-            const response = await fetch(`${getBackendUrl()}/after-school/submissions/${submissionId}/upload`, {
-                method: 'POST',
-                headers,
-                body: fileData
-            });
-
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({}));
-                const errorMessage = errorData.detail || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
-                throw new Error(errorMessage);
-            }
-
-            const data = await response.json();
-            console.log('✅ File uploaded successfully for submission:', submissionId);
-            return data;
-        } catch (error) {
-            console.error('❌ Error uploading submission file:', error);
-            throw error;
-        }
+    /**
+     * [DEPRECATED] Uploading to a submission is not used in the new workflow.
+     * Use uploadsService.bulk upload endpoints to generate PDF and auto-grade.
+     */
+    async uploadSubmissionFile(): Promise<AISubmission> {
+        throw new Error('uploadSubmissionFile is deprecated. Use uploadsService bulk upload workflow instead.');
     }
 
     /**
@@ -564,7 +662,7 @@ class GradesService {
         try {
             console.log('📋 Fetching submissions for session:', sessionId);
             const response = await this.makeAuthenticatedRequest(
-                `/after-school/submissions/session/${sessionId}`,
+                `/after-school/uploads/sessions/${sessionId}/submissions`,
                 token
             );
 
@@ -675,8 +773,9 @@ class GradesService {
                 submissionData
             );
 
-            const data = await response.json();
-            console.log('✅ Assignment auto-graded successfully:', data.grading_results.ai_score);
+            const data = await response.json() as AutoGradingResponse;
+            const score = data.grade_result?.normalized?.ai_score ?? data.grade_result?.percentage ?? null;
+            console.log('✅ Assignment auto-graded successfully:', score !== null ? `${score}%` : 'score unavailable');
             return data;
         } catch (error) {
             console.error('❌ Error auto-grading assignment:', error);
@@ -687,7 +786,7 @@ class GradesService {
     /**
      * Process submission with Gemini AI (Advanced AI processing)
      */
-    async processSubmissionWithAI(submissionId: number, token: string): Promise<any> {
+    async processSubmissionWithAI(submissionId: number, token: string): Promise<ProcessSubmissionResponse> {
         try {
             console.log('🧠 Processing submission with Gemini AI:', submissionId);
 
@@ -697,8 +796,12 @@ class GradesService {
                 'POST'
             );
 
-            const data = await response.json();
-            console.log('✅ Submission processed with AI successfully');
+            const data = await response.json() as ProcessSubmissionResponse;
+            console.log(
+                '✅ Submission processed with AI successfully',
+                'score=',
+                data.grade_result?.normalized?.ai_score ?? data.grade_result?.percentage ?? 'N/A'
+            );
             return data;
         } catch (error) {
             console.error('❌ Error processing submission with AI:', error);
@@ -1097,6 +1200,47 @@ class GradesService {
             averageScore,
             workflowCompletionRate
         };
+    }
+
+    /**
+     * Find most recent AI submission linked to a specific assignment id.
+     * Scans recent sessions and returns the newest processed submission.
+     */
+    async findLatestSubmissionForAssignment(
+        assignmentId: number,
+        token: string,
+        scanLimit: number = 30
+    ): Promise<AISubmission | null> {
+        try {
+            // Include both legacy session-tied and session-less (recent submissions) sources
+            const recentResp = await this.makeAuthenticatedRequest(
+                `/after-school/uploads/user/recent-submissions?limit=${encodeURIComponent(scanLimit)}`,
+                token
+            );
+            const recentList: AISubmission[] = await recentResp.json();
+
+            const sessionLists = await (async () => {
+                try {
+                    const sessions = await this.getUserSessions(token, { limit: scanLimit });
+                    const lists = await Promise.all(
+                        sessions.map(s => this.getSessionSubmissions(s.id, token).catch(() => []))
+                    );
+                    return lists.flat();
+                } catch {
+                    return [] as AISubmission[];
+                }
+            })();
+
+            const combined = [...recentList, ...sessionLists].filter(
+                s => s && s.ai_processed && (s as any).assignment_id === assignmentId
+            );
+            if (combined.length === 0) return null;
+            combined.sort((a, b) => new Date(b.submitted_at).getTime() - new Date(a.submitted_at).getTime());
+            return combined[0];
+        } catch (e) {
+            console.warn('findLatestSubmissionForAssignment failed', e);
+            return null;
+        }
     }
 }
 

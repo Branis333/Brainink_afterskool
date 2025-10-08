@@ -24,8 +24,7 @@ import {
     PendingSubmissionsByCourse,
     BulkGradingResponse,
     KANAGradingRequest,
-    StudentAssignment,
-    AutoGradingResponse
+    StudentAssignment
 } from '../../services/gradesService';
 
 const { width } = Dimensions.get('window');
@@ -37,6 +36,23 @@ interface GradingProgress {
     coursesBeingGraded: Set<number>;
     progressData: { [courseId: number]: { current: number; total: number } };
 }
+
+const summarizeBulkGrading = (result: BulkGradingResponse) => {
+    const gradingResults = Array.isArray(result.grading_results) ? result.grading_results : [];
+    const total = result.total_submissions ?? result.batch_summary?.total_submissions ?? gradingResults.length;
+    const graded = result.submissions_graded ?? result.batch_summary?.successfully_graded ?? gradingResults.filter(r => r.success).length;
+    const failed = result.submissions_failed ?? result.batch_summary?.failed_grades ?? Math.max(total - graded, 0);
+    const averageScore = result.batch_summary?.average_score ?? null;
+    const successRate = result.batch_summary?.success_rate ?? (total > 0 ? (graded / total) * 100 : null);
+
+    return {
+        total,
+        graded,
+        failed,
+        averageScore,
+        successRate
+    };
+};
 
 export const AIGradingStatusScreen: React.FC = () => {
     const navigation = useNavigation<NavigationProp>();
@@ -223,9 +239,17 @@ export const AIGradingStatusScreen: React.FC = () => {
             const result = await gradesService.gradeCourseSubmissions(gradingRequest, token);
             setLastGradingResults(result);
 
+            const summary = summarizeBulkGrading(result);
+            const averageLine = summary.averageScore !== null
+                ? `\n🎯 Average score: ${Math.round(summary.averageScore)}%`
+                : '';
+            const successRateLine = summary.successRate !== null
+                ? `\n📈 Success rate: ${Math.round(summary.successRate)}%`
+                : '';
+
             Alert.alert(
                 'Grading Complete',
-                `K.A.N.A. AI has finished grading!\n\n✅ Successfully graded: ${result.graded_count}\n❌ Failed: ${result.failed_count}\n📊 Total processed: ${result.total_submissions}`,
+                `K.A.N.A. AI has finished grading!\n\n✅ Successfully graded: ${summary.graded}\n❌ Failed: ${summary.failed}\n📊 Total processed: ${summary.total}${averageLine}${successRateLine}`,
                 [{ text: 'OK', onPress: () => setShowGradingModal(false) }]
             );
 
@@ -510,27 +534,49 @@ export const AIGradingStatusScreen: React.FC = () => {
     const renderResultsCard = () => {
         if (!lastGradingResults) return null;
 
+        const summary = summarizeBulkGrading(lastGradingResults);
+
         return (
             <View style={styles.resultsCard}>
                 <Text style={styles.cardTitle}>Last Grading Results</Text>
                 <View style={styles.resultsGrid}>
                     <View style={styles.resultItem}>
-                        <Text style={styles.resultValue}>{lastGradingResults.total_submissions}</Text>
+                        <Text style={styles.resultValue}>{summary.total}</Text>
                         <Text style={styles.resultLabel}>Total</Text>
                     </View>
                     <View style={styles.resultItem}>
                         <Text style={[styles.resultValue, { color: '#10B981' }]}>
-                            {lastGradingResults.graded_count}
+                            {summary.graded}
                         </Text>
                         <Text style={styles.resultLabel}>Graded</Text>
                     </View>
                     <View style={styles.resultItem}>
                         <Text style={[styles.resultValue, { color: '#EF4444' }]}>
-                            {lastGradingResults.failed_count}
+                            {summary.failed}
                         </Text>
                         <Text style={styles.resultLabel}>Failed</Text>
                     </View>
                 </View>
+                {(summary.averageScore !== null || summary.successRate !== null) && (
+                    <View style={styles.summaryMetrics}>
+                        {summary.averageScore !== null && (
+                            <View style={styles.summaryMetricRow}>
+                                <Text style={styles.summaryMetricLabel}>Average Score</Text>
+                                <Text style={styles.summaryMetricValue}>
+                                    {Math.round(summary.averageScore)}%
+                                </Text>
+                            </View>
+                        )}
+                        {summary.successRate !== null && (
+                            <View style={styles.summaryMetricRow}>
+                                <Text style={styles.summaryMetricLabel}>Success Rate</Text>
+                                <Text style={styles.summaryMetricValue}>
+                                    {Math.round(summary.successRate)}%
+                                </Text>
+                            </View>
+                        )}
+                    </View>
+                )}
                 <TouchableOpacity
                     style={styles.viewResultsButton}
                     onPress={() => {
@@ -847,6 +893,28 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#6B7280',
         marginTop: 4,
+    },
+    summaryMetrics: {
+        marginTop: 12,
+        padding: 12,
+        backgroundColor: '#F3F4F6',
+        borderRadius: 12,
+        gap: 8,
+    },
+    summaryMetricRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    summaryMetricLabel: {
+        fontSize: 13,
+        color: '#6B7280',
+        fontWeight: '500',
+    },
+    summaryMetricValue: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#111827',
     },
     viewResultsButton: {
         alignItems: 'center',

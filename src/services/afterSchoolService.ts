@@ -138,7 +138,7 @@ export interface StudentAssignment {
     assigned_at: string;
     due_date: string;
     submitted_at?: string;
-    status: 'assigned' | 'submitted' | 'graded' | 'overdue';
+    status: 'assigned' | 'submitted' | 'graded' | 'overdue' | 'passed' | 'needs_retry' | 'failed';
     submission_file_path?: string;
     submission_content?: string;
     grade?: number;
@@ -170,16 +170,23 @@ export interface UnifiedCourse extends ComprehensiveCourse {
     // No extra fields yet; placeholder for future normalization metadata
 }
 
-// Study Session Interfaces
-export interface StudySessionStart {
+// Study Session Interfaces (deprecated - replaced by newer interface below)
+export interface StudySessionMarkDoneLegacy {
     course_id: number;
-    lesson_id?: number; // Optional for block-based courses
+    lesson_id?: number; // Optional for legacy courses
     block_id?: number;  // For AI-generated course blocks
 }
 
 export interface StudySessionEnd {
     completion_percentage: number;
     status: 'completed' | 'abandoned';
+}
+
+// Block Availability Interface
+export interface BlockAvailability {
+    available: boolean;
+    completed: boolean;
+    reason: string;
 }
 
 export interface StudySession {
@@ -203,8 +210,9 @@ export interface StudySession {
 // AI Submission Interfaces
 export interface AISubmissionCreate {
     course_id: number;
-    lesson_id: number;
-    session_id: number;
+    lesson_id?: number;
+    block_id?: number;
+    session_id?: number; // deprecated in mark-done model
     submission_type: 'homework' | 'quiz' | 'practice' | 'assessment';
 }
 
@@ -212,8 +220,9 @@ export interface AISubmission {
     id: number;
     user_id: number;
     course_id: number;
-    lesson_id: number;
-    session_id: number;
+    lesson_id?: number;
+    block_id?: number;
+    session_id?: number; // may be undefined in mark-done model
     submission_type: string;
     original_filename?: string;
     file_path?: string;
@@ -241,6 +250,9 @@ export interface StudentProgress {
     lessons_completed: number;
     total_lessons: number;
     completion_percentage: number;
+    // Added for block-based courses
+    blocks_completed?: number;
+    total_blocks?: number;
     average_score?: number;
     total_study_time: number;
     sessions_count: number;
@@ -271,9 +283,80 @@ export interface StudentDashboard {
     user_id: number;
     active_courses: Course[];
     recent_sessions: StudySession[];
-    progress_summary: StudentProgress[];
-    total_study_time: number;
-    average_score?: number;
+    progress_summary?: StudentProgress[];
+    total_study_time?: number;
+    average_score?: number | null;
+}
+
+// Assignment Grading Interfaces - Updated to match backend response structure
+export interface AssignmentGradeResult {
+    assignment: {
+        id: number;
+        title: string;
+        description: string;
+        points: number;
+        due_date: number;
+    };
+    student_assignment: {
+        id: number;
+        status: 'assigned' | 'submitted' | 'graded' | 'overdue' | 'passed' | 'needs_retry' | 'failed';
+        grade: number;
+        submitted_at?: string;
+        feedback?: string;
+    };
+    grade_response: {
+        assignment_id: number;
+        ai_score: number;
+        feedback: string;
+        detailed_feedback: any;
+        passed: boolean;
+        attempts_used: number;
+        attempts_remaining: number;
+    };
+}
+
+export interface AssignmentStatus {
+    assignment: {
+        id: number;
+        title: string;
+        description: string;
+        points: number;
+        required_percentage: number;
+    };
+    student_assignment: {
+        id: number;
+        status: 'assigned' | 'submitted' | 'graded' | 'overdue' | 'passed' | 'needs_retry' | 'failed';
+        grade: number;
+        submitted_at?: string;
+        feedback?: string;
+    };
+    attempts_info: {
+        attempts_used: number;
+        attempts_remaining: number;
+        can_retry: boolean;
+    };
+    message: string;
+    passing_grade: boolean;
+}
+
+export interface BlockProgress {
+    block_id: number;
+    week: number;
+    block_number: number;
+    title: string;
+    description: string;
+    duration_minutes: number;
+    is_completed: boolean;
+    is_available: boolean;
+    completed_at?: string;
+}
+
+export interface CourseBlocksProgress {
+    course_id: number;
+    total_blocks: number;
+    completed_blocks: number;
+    completion_percentage: number;
+    blocks: BlockProgress[];
 }
 
 export interface MessageResponse {
@@ -307,6 +390,30 @@ export interface CourseFilters {
     skip?: number;
     limit?: number;
 }
+
+
+
+// Course progress with blocks - Updated to match backend response
+export interface CourseBlocksProgressResponse {
+    course_id: number;
+    total_blocks: number;
+    completed_blocks: number;
+    completion_percentage: number;
+    blocks: Array<{
+        block_id: number;
+        week: number;
+        block_number: number;
+        title: string;
+        description?: string;
+        duration_minutes: number;
+        is_completed: boolean;
+        is_available: boolean;
+        completed_at?: string;
+    }>;
+}
+
+// Study session mark-done response mirrors backend StudySessionOut
+export type StudySessionMarkDoneResponse = StudySession;
 
 class AfterSchoolService {
     private dashboardInFlight: Promise<StudentDashboard> | null = null;
@@ -799,46 +906,30 @@ class AfterSchoolService {
     // STUDY SESSION METHODS
     // ===============================
 
+
+
     /**
-     * Start a new study session
+     * Check if a block is available for the current user
      */
-    async startStudySession(sessionData: StudySessionStart, token: string): Promise<StudySession> {
+    async checkBlockAvailability(blockId: number, token: string): Promise<BlockAvailability> {
         try {
-            // Attempt lightweight JWT decode (header.payload.signature) to extract user id for richer logs
-            let decodedUser: any = null;
-            try {
-                const rawToken = token.startsWith('Bearer ') ? token.split(' ')[1] : token;
-                const parts = rawToken.split('.');
-                if (parts.length >= 2) {
-                    const payloadJson = atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'));
-                    decodedUser = JSON.parse(payloadJson);
-                }
-            } catch (_) {
-                // Ignore decode issues silently
-            }
-            console.log('▶️ Starting study session:', {
-                ...sessionData,
-                decoded_user_id: decodedUser?.id,
-                decoded_username: decodedUser?.uname || decodedUser?.username
-            });
             const response = await this.makeAuthenticatedRequest(
-                '/after-school/sessions/start',
+                `/grades/blocks/${blockId}/availability`,
                 token,
-                'POST',
-                sessionData
+                'GET'
             );
 
             const data = await response.json();
-            console.log('✅ Study session started successfully:', data.id);
+            console.log('✅ Block availability checked:', { blockId, available: data.available });
             return data;
         } catch (error) {
-            console.error('❌ Error starting study session:', error);
+            console.error('❌ Error checking block availability:', error);
             throw error;
         }
     }
 
     /**
-     * End a study session
+     * End a study session (deprecated - mark-done model no longer requires sessions)
      */
     async endStudySession(sessionId: number, sessionData: StudySessionEnd, token: string): Promise<StudySession> {
         try {
@@ -860,7 +951,7 @@ class AfterSchoolService {
     }
 
     /**
-     * Get study session details
+     * Get study session details (deprecated - retained for backward compatibility)
      */
     async getStudySession(sessionId: number, token: string): Promise<StudySession> {
         try {
@@ -984,16 +1075,14 @@ class AfterSchoolService {
     // ===============================
 
     /**
-     * Get student progress for a course
+     * Get student progress for a course (updated for mark-done model)
      */
     async getStudentProgress(courseId: number, token: string): Promise<StudentProgress> {
         try {
             console.log('📊 Fetching student progress for course:', courseId);
-            // Use the correct endpoint that exists in backend
-            // Backend exposes progress through comprehensive course details or a dedicated endpoint (sessions/progress/{id})
-            // Adjusted path to match backend naming (previous path returned 404)
+            // Use course progress endpoint instead of session-based endpoint
             const response = await this.makeAuthenticatedRequest(
-                `/after-school/sessions/progress/${courseId}`,
+                `/after-school/courses/${courseId}/progress`,
                 token
             );
 
@@ -1209,6 +1298,10 @@ class AfterSchoolService {
 
             const data = await response.json();
             console.log('✅ Course with blocks fetched successfully');
+            // Backend returns a plain array of CourseBlockOut; normalize to expected shape
+            if (Array.isArray(data)) {
+                return ({ blocks: data, assignments: [] } as any) as CourseWithBlocks;
+            }
             return data;
         } catch (error) {
             console.error('❌ Error fetching course with blocks:', error);
@@ -1268,8 +1361,9 @@ class AfterSchoolService {
             const response = await this.makeAuthenticatedRequest(endpoint, token);
             const data = await response.json();
 
-            console.log('✅ User assignments fetched successfully:', data.length);
-            return data;
+            const list = Array.isArray(data) ? data : (Array.isArray(data?.assignments) ? data.assignments : []);
+            console.log('✅ User assignments fetched successfully:', list.length);
+            return list;
         } catch (error) {
             console.error('❌ Error fetching user assignments:', error);
             throw error;
@@ -1353,8 +1447,9 @@ class AfterSchoolService {
             const response = await this.makeAuthenticatedRequest(endpoint, token);
             const data = await response.json();
 
-            console.log('✅ Course assignments fetched successfully:', Array.isArray(data) ? data.length : 0);
-            return Array.isArray(data) ? data : [];
+            const list = Array.isArray(data) ? data : (Array.isArray(data?.assignments) ? data.assignments : []);
+            console.log('✅ Course assignments fetched successfully:', list.length);
+            return list;
         } catch (error) {
             console.error('❌ Error fetching course assignments:', error);
             throw this.handleApiError(error, 'Error fetching course assignments');
@@ -1458,7 +1553,7 @@ class AfterSchoolService {
     async submitAssignmentWithImages(
         courseId: number,
         assignmentId: number,
-        sessionId: number,
+        blockId: number,
         imageFiles: any[],
         token: string,
         submissionType: 'homework' | 'quiz' | 'practice' | 'assessment' = 'homework'
@@ -1469,20 +1564,18 @@ class AfterSchoolService {
     }> {
         try {
             console.log('🚀 Starting integrated assignment submission workflow');
-            console.log('📋 Course ID:', courseId, 'Assignment ID:', assignmentId, 'Session ID:', sessionId);
+            console.log('📋 Course ID:', courseId, 'Assignment ID:', assignmentId, 'Block ID:', blockId);
 
             // Step 1: Convert images to PDF using uploads service
             console.log('📸 Step 1: Converting images to PDF...');
             const uploadsService = require('./uploadsService').uploadsService;
 
             const bulkUploadRequest = {
-                session_id: sessionId,
+                course_id: courseId,
                 submission_type: submissionType,
-                page_count: imageFiles.length,
-                images: imageFiles.map((file, index) => ({
-                    filename: file.name || `image_${index + 1}`,
-                    data: file.data || file.base64 || file
-                }))
+                files: imageFiles,
+                assignment_id: assignmentId,
+                block_id: blockId
             };
 
             const pdfSubmission = await uploadsService.bulkUploadImagesToPDF(bulkUploadRequest, token);
@@ -1515,6 +1608,171 @@ class AfterSchoolService {
         } catch (error) {
             console.error('❌ Error in integrated assignment workflow:', error);
             throw error;
+        }
+    }
+
+    // ===============================
+    // STUDY SESSION MANAGEMENT (NEW)
+    // ===============================
+
+    /**
+     * Mark a study session as done
+     */
+    async markStudySessionDone(blockId: number, courseId: number, token: string): Promise<StudySession> {
+        try {
+            const response = await this.makeAuthenticatedRequest(
+                '/after-school/sessions/mark-done',
+                token,
+                'POST',
+                {
+                    block_id: blockId,
+                    course_id: courseId
+                }
+            );
+
+            const data = await response.json();
+            console.log('✅ Study session marked as done:', data);
+            return data;
+
+        } catch (error) {
+            console.error('❌ Error marking study session as done:', error);
+            throw this.handleApiError(error, 'Mark Study Session Done');
+        }
+    }
+
+    /**
+     * Get course blocks progress
+     */
+    async getCourseBlocksProgress(courseId: number, token: string): Promise<CourseBlocksProgressResponse> {
+        try {
+            // Preferred endpoint if available in backend
+            const response = await this.makeAuthenticatedRequest(
+                `/after-school/courses/${courseId}/blocks-progress`,
+                token,
+                'GET'
+            );
+
+            const data = await response.json();
+            console.log('✅ Course blocks progress retrieved:', data);
+            return data;
+
+        } catch (primaryError: any) {
+            const msg = primaryError?.message?.toLowerCase() || '';
+            const is404 = msg.includes('404') || msg.includes('not found');
+            if (!is404) {
+                console.warn('⚠️ Primary blocks-progress endpoint failed, attempting fallback:', primaryError?.message || primaryError);
+            } else {
+                console.log('ℹ️ blocks-progress endpoint not available; deriving progress locally.');
+            }
+
+            // Fallback strategy: derive progress from course blocks and student progress counts
+            try {
+                const [withBlocks, progress] = await Promise.all([
+                    this.getCourseWithBlocks(courseId, token).catch(() => ({ blocks: [] as CourseBlock[] } as any)),
+                    this.getStudentProgress(courseId, token).catch(() => null)
+                ]);
+
+                const blocks: CourseBlock[] = Array.isArray((withBlocks as any).blocks) ? (withBlocks as any).blocks : [];
+
+                // Sort blocks in curriculum order
+                const sortedBlocks = [...blocks].sort((a, b) => {
+                    if (a.week !== b.week) return (a.week ?? 0) - (b.week ?? 0);
+                    if (a.block_number !== b.block_number) return (a.block_number ?? 0) - (b.block_number ?? 0);
+                    return (a.id ?? 0) - (b.id ?? 0);
+                });
+
+                const totalBlocks = sortedBlocks.length;
+                const completedCount = Math.max(0, Math.min(
+                    totalBlocks,
+                    progress?.blocks_completed ?? 0
+                ));
+
+                const blocksProgress: BlockProgress[] = sortedBlocks.map((b, idx) => ({
+                    block_id: b.id,
+                    week: b.week,
+                    block_number: b.block_number,
+                    title: b.title,
+                    description: b.description ?? '',
+                    duration_minutes: b.duration_minutes ?? 0,
+                    is_completed: idx < completedCount,
+                    is_available: idx === completedCount, // next block available; others locked
+                    completed_at: undefined
+                }));
+
+                const completedBlocks = completedCount;
+                const completion_percentage = totalBlocks > 0 ? Math.round((completedBlocks / totalBlocks) * 100) : 0;
+
+                const derived: CourseBlocksProgressResponse = {
+                    course_id: courseId,
+                    total_blocks: totalBlocks,
+                    completed_blocks: completedBlocks,
+                    completion_percentage,
+                    blocks: blocksProgress
+                };
+
+                console.log('✅ Derived course blocks progress (fallback):', {
+                    total_blocks: derived.total_blocks,
+                    completed_blocks: derived.completed_blocks
+                });
+                return derived;
+            } catch (fallbackError) {
+                console.error('❌ Fallback derivation for blocks progress failed:', fallbackError);
+                throw this.handleApiError(primaryError, 'Get Course Blocks Progress');
+            }
+        }
+    }
+
+    // ===============================
+    // ASSIGNMENT GRADING (NEW)
+    // ===============================
+
+    /**
+     * Get assignment status (updated for mark-done model)
+     */
+    async getAssignmentStatus(assignmentId: string, token: string): Promise<AssignmentStatus | null> {
+        try {
+            // Try the new assignment status endpoint first
+            const response = await this.makeAuthenticatedRequest(
+                `/after-school/assignments/${assignmentId}/status`,
+                token,
+                'GET'
+            );
+
+            const data = await response.json();
+            console.log('✅ Assignment status retrieved:', data);
+            return data;
+
+        } catch (error: any) {
+            const msg = error?.message?.toLowerCase() || '';
+            if (msg.includes('404') || msg.includes('not found')) {
+                // Quietly treat as no status available
+                console.log('ℹ️ Assignment status endpoint not available; returning null.');
+            } else {
+                console.warn('⚠️ Error getting assignment status (non-fatal):', error?.message || error);
+            }
+            // Return null instead of throwing to allow graceful fallback
+            return null;
+        }
+    }
+
+    /**
+     * Retry assignment
+     */
+    async retryAssignment(assignmentId: string, token: string): Promise<AssignmentGradeResult> {
+        try {
+            const response = await this.makeAuthenticatedRequest(
+                `/grades/assignments/${assignmentId}/retry`,
+                token,
+                'POST'
+            );
+
+            const data = await response.json();
+            console.log('✅ Assignment retry initiated:', data);
+            return data;
+
+        } catch (error) {
+            console.error('❌ Error retrying assignment:', error);
+            throw this.handleApiError(error, 'Retry Assignment');
         }
     }
 

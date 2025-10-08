@@ -14,10 +14,12 @@ import {
     Alert,
     ActivityIndicator,
     Dimensions,
+    Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useFocusEffect } from '@react-navigation/native';
+import { WebView } from 'react-native-webview';
 import { useAuth } from '../../context/AuthContext';
 import {
     afterSchoolService,
@@ -53,6 +55,7 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
     const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [expandedVideoIndex, setExpandedVideoIndex] = useState<number | null>(null);
 
     // Load block data
     const loadBlockData = async (isRefresh: boolean = false) => {
@@ -73,6 +76,11 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
             setBlock(blockData);
             setCourse(courseData);
             setAssignments(assignmentsData);
+
+            // Debug: Log resources
+            console.log('📦 Block Data:', blockData);
+            console.log('🎬 Resources:', blockData.resources);
+            console.log('🎬 Resources length:', blockData.resources?.length);
         } catch (error) {
             console.error('Error loading lesson data:', error);
             Alert.alert(
@@ -99,30 +107,21 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
         loadBlockData(true);
     }, []);
 
-    // Start study session for this block
+    // Start study session for this block (mark-done model: navigate without creating server session)
     const startStudySession = async () => {
         try {
             if (!token || !block) return;
-
-            const session = await afterSchoolService.startStudySession({
-                course_id: courseId,
-                block_id: blockId
-            }, token);
-
+            const localSessionId = Math.floor(Math.random() * 1_000_000);
             navigation.navigate('StudySession', {
-                sessionId: session.id,
+                sessionId: localSessionId,
                 courseId,
                 blockId,
                 blockTitle: block.title,
                 courseTitle
             });
         } catch (error) {
-            console.error('Error starting study session:', error);
-            Alert.alert(
-                'Error',
-                'Failed to start study session. Please try again.',
-                [{ text: 'OK' }]
-            );
+            console.error('Error opening study session:', error);
+            Alert.alert('Error', 'Failed to open study session. Please try again.', [{ text: 'OK' }]);
         }
     };
 
@@ -298,34 +297,8 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
             {/* Learning Objectives */}
             {block.learning_objectives && block.learning_objectives.length > 0 && (
                 <View style={styles.objectivesContainer}>
-                    <Text style={styles.objectivesTitle}>Learning Objectives</Text>
-                    <Text style={styles.objectivesText}>{block.learning_objectives.join('\n• ')}</Text>
-                </View>
-            )}
-
-            {/* Assignment Workflow Integration */}
-            {assignments.length > 0 && (
-                <View style={styles.assignmentSection}>
-                    <Text style={styles.assignmentSectionTitle}>Assignments for this Block</Text>
-                    <View style={styles.assignmentStats}>
-                        <Text style={styles.assignmentCount}>
-                            {assignments.filter(a => a.status === 'assigned').length} pending
-                        </Text>
-                        <Text style={styles.assignmentCount}>
-                            {assignments.filter(a => a.status === 'submitted').length} submitted
-                        </Text>
-                        <Text style={styles.assignmentCount}>
-                            {assignments.filter(a => a.status === 'graded').length} graded
-                        </Text>
-                    </View>
-                    {assignments.some(a => a.status === 'assigned') && (
-                        <TouchableOpacity
-                            style={styles.continueWorkflowButton}
-                            onPress={continueToAssignments}
-                        >
-                            <Text style={styles.continueWorkflowButtonText}>Continue to Assignments</Text>
-                        </TouchableOpacity>
-                    )}
+                    <Text style={styles.objectivesTitle}>🎯 Learning Objectives</Text>
+                    <Text style={styles.objectivesText}>• {block.learning_objectives.join('\n• ')}</Text>
                 </View>
             )}
 
@@ -338,6 +311,207 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
             </TouchableOpacity>
         </View>
     );
+
+    // Open URL in browser
+    const openURL = async (url: string, title: string) => {
+        try {
+            const supported = await Linking.canOpenURL(url);
+            if (supported) {
+                await Linking.openURL(url);
+            } else {
+                Alert.alert('Error', `Cannot open URL: ${title}`);
+            }
+        } catch (error) {
+            console.error('Error opening URL:', error);
+            Alert.alert('Error', 'Failed to open link');
+        }
+    };
+
+    // Extract YouTube video ID from URL
+    const getYouTubeVideoId = (url: string): string | null => {
+        try {
+            // Handle various YouTube URL formats
+            const patterns = [
+                /(?:https?:\/\/)?(?:www\.)?youtube\.com\/watch\?v=([^&]+)/,
+                /(?:https?:\/\/)?(?:www\.)?youtube\.com\/embed\/([^?]+)/,
+                /(?:https?:\/\/)?youtu\.be\/([^?]+)/,
+                /(?:https?:\/\/)?(?:www\.)?youtube\.com\/v\/([^?]+)/
+            ];
+
+            for (const pattern of patterns) {
+                const match = url.match(pattern);
+                if (match && match[1]) {
+                    return match[1];
+                }
+            }
+            return null;
+        } catch (error) {
+            console.error('Error extracting YouTube ID:', error);
+            return null;
+        }
+    };
+
+    // Toggle video player expansion
+    const toggleVideoPlayer = (index: number) => {
+        setExpandedVideoIndex(expandedVideoIndex === index ? null : index);
+    };
+
+    // Render video resources at the top
+    const renderVideoResources = () => {
+        console.log('🎬 renderVideoResources called');
+        console.log('🎬 block.resources:', block?.resources);
+
+        if (!block.resources || block.resources.length === 0) {
+            console.log('❌ No resources found');
+            return null;
+        }
+
+        const videoResources = block.resources.filter((r: any) => r.type === 'video');
+        console.log('🎬 Video resources filtered:', videoResources);
+        console.log('🎬 Video resources count:', videoResources.length);
+
+        if (videoResources.length === 0) {
+            console.log('❌ No video resources found');
+            return null;
+        }
+
+        return (
+            <View style={styles.resourcesContainer}>
+                <Text style={styles.resourcesSectionTitle}>🎥 Video Resources</Text>
+                <Text style={styles.resourcesSectionSubtitle}>
+                    Watch these videos to learn more about this topic
+                </Text>
+                {videoResources.map((resource: any, index: number) => {
+                    const videoId = getYouTubeVideoId(resource.url);
+                    const isExpanded = expandedVideoIndex === index;
+
+                    return (
+                        <View key={index} style={styles.videoCard}>
+                            {/* Video Header */}
+                            <TouchableOpacity
+                                style={styles.videoHeader}
+                                onPress={() => toggleVideoPlayer(index)}
+                                activeOpacity={0.7}
+                            >
+                                <View style={styles.videoIconContainer}>
+                                    <Text style={styles.videoIcon}>
+                                        {isExpanded ? '▼' : '▶️'}
+                                    </Text>
+                                </View>
+                                <View style={styles.videoInfo}>
+                                    <Text style={styles.videoTitle} numberOfLines={isExpanded ? undefined : 2}>
+                                        {resource.title}
+                                    </Text>
+                                    {resource.search_query && !isExpanded && (
+                                        <Text style={styles.videoQuery} numberOfLines={1}>
+                                            {resource.search_query}
+                                        </Text>
+                                    )}
+                                </View>
+                                <View style={styles.videoToggleContainer}>
+                                    <Text style={styles.videoToggleText}>
+                                        {isExpanded ? 'Close' : 'Play'}
+                                    </Text>
+                                </View>
+                            </TouchableOpacity>
+
+                            {/* Embedded Video Player */}
+                            {isExpanded && videoId && (
+                                <View style={styles.videoPlayerContainer}>
+                                    <View style={styles.videoPlayerWrapper}>
+                                        <WebView
+                                            style={styles.videoPlayer}
+                                            source={{
+                                                uri: `https://www.youtube.com/embed/${videoId}?autoplay=0&modestbranding=1&rel=0`
+                                            }}
+                                            allowsFullscreenVideo={true}
+                                            mediaPlaybackRequiresUserAction={false}
+                                            javaScriptEnabled={true}
+                                            domStorageEnabled={true}
+                                            scrollEnabled={false}
+                                        />
+                                    </View>
+                                    {resource.search_query && (
+                                        <Text style={styles.videoQueryExpanded}>
+                                            🔍 {resource.search_query}
+                                        </Text>
+                                    )}
+                                </View>
+                            )}
+
+                            {/* Fallback: Open in Browser */}
+                            {isExpanded && !videoId && (
+                                <View style={styles.videoFallbackContainer}>
+                                    <Text style={styles.videoFallbackText}>
+                                        Video preview not available
+                                    </Text>
+                                    <TouchableOpacity
+                                        style={styles.videoFallbackButton}
+                                        onPress={() => openURL(resource.url, resource.title)}
+                                    >
+                                        <Text style={styles.videoFallbackButtonText}>
+                                            Open in Browser
+                                        </Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+                        </View>
+                    );
+                })}
+            </View>
+        );
+    };
+
+    // Render article resources at the bottom
+    const renderArticleResources = () => {
+        console.log('📚 renderArticleResources called');
+        console.log('📚 block.resources:', block?.resources);
+
+        if (!block.resources || block.resources.length === 0) {
+            console.log('❌ No resources found for articles');
+            return null;
+        }
+
+        const articleResources = block.resources.filter((r: any) => r.type === 'article');
+        console.log('📚 Article resources filtered:', articleResources);
+        console.log('📚 Article resources count:', articleResources.length);
+
+        if (articleResources.length === 0) {
+            console.log('❌ No article resources found');
+            return null;
+        }
+
+        return (
+            <View style={styles.resourcesContainer}>
+                <Text style={styles.resourcesSectionTitle}>📚 Article Resources</Text>
+                <Text style={styles.resourcesSectionSubtitle}>
+                    Read these articles for deeper understanding
+                </Text>
+                {articleResources.map((resource: any, index: number) => (
+                    <TouchableOpacity
+                        key={index}
+                        style={styles.resourceCard}
+                        onPress={() => openURL(resource.url, resource.title)}
+                    >
+                        <View style={styles.resourceIconContainer}>
+                            <Text style={styles.resourceIcon}>📄</Text>
+                        </View>
+                        <View style={styles.resourceInfo}>
+                            <Text style={styles.resourceTitle} numberOfLines={2}>
+                                {resource.title}
+                            </Text>
+                            {resource.search_query && (
+                                <Text style={styles.resourceQuery} numberOfLines={1}>
+                                    {resource.search_query}
+                                </Text>
+                            )}
+                        </View>
+                        <Text style={styles.resourceArrow}>→</Text>
+                    </TouchableOpacity>
+                ))}
+            </View>
+        );
+    };
 
     // Render block content
     const renderBlockContent = () => (
@@ -357,6 +531,48 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
             )}
         </View>
     );
+
+    // Render assignment workflow section
+    const renderAssignmentWorkflow = () => {
+        if (assignments.length === 0) return null;
+
+        return (
+            <View style={styles.assignmentSection}>
+                <Text style={styles.assignmentSectionTitle}>📝 Assignments for this Block</Text>
+                <Text style={styles.assignmentSectionSubtitle}>
+                    Complete the assignments below to test your understanding
+                </Text>
+                <View style={styles.assignmentStats}>
+                    <View style={styles.assignmentStatItem}>
+                        <Text style={styles.assignmentStatNumber}>
+                            {assignments.filter(a => a.status === 'assigned').length}
+                        </Text>
+                        <Text style={styles.assignmentStatLabel}>Pending</Text>
+                    </View>
+                    <View style={styles.assignmentStatItem}>
+                        <Text style={styles.assignmentStatNumber}>
+                            {assignments.filter(a => a.status === 'submitted').length}
+                        </Text>
+                        <Text style={styles.assignmentStatLabel}>Submitted</Text>
+                    </View>
+                    <View style={styles.assignmentStatItem}>
+                        <Text style={styles.assignmentStatNumber}>
+                            {assignments.filter(a => a.status === 'graded').length}
+                        </Text>
+                        <Text style={styles.assignmentStatLabel}>Graded</Text>
+                    </View>
+                </View>
+                {assignments.some(a => a.status === 'assigned') && (
+                    <TouchableOpacity
+                        style={styles.continueWorkflowButton}
+                        onPress={continueToAssignments}
+                    >
+                        <Text style={styles.continueWorkflowButtonText}>Continue to Assignments ({assignments.filter(a => a.status === 'assigned').length} pending)</Text>
+                    </TouchableOpacity>
+                )}
+            </View>
+        );
+    };
 
     // Render block navigation
     const renderBlockNavigation = () => (
@@ -412,7 +628,10 @@ export const LessonViewScreen: React.FC<Props> = ({ navigation, route }) => {
                 }
             >
                 {renderBlockHeader()}
+                {renderVideoResources()}
                 {renderBlockContent()}
+                {renderArticleResources()}
+                {renderAssignmentWorkflow()}
             </ScrollView>
 
             {/* Fixed Navigation Footer */}
@@ -487,7 +706,7 @@ const styles = StyleSheet.create({
     lessonHeaderContainer: {
         backgroundColor: '#fff',
         padding: 20,
-        marginBottom: 16,
+        marginBottom: 8,
     },
     breadcrumbContainer: {
         flexDirection: 'row',
@@ -562,8 +781,9 @@ const styles = StyleSheet.create({
         backgroundColor: '#fff',
         borderRadius: 12,
         padding: 20,
-        marginHorizontal: 20,
-        marginBottom: 100, // Space for navigation footer
+        marginHorizontal: 16,
+        marginTop: 8,
+        marginBottom: 16,
     },
     contentTitle: {
         fontSize: 20,
@@ -637,21 +857,50 @@ const styles = StyleSheet.create({
     },
     // Assignment workflow styles
     assignmentSection: {
-        backgroundColor: '#f8f9fa',
+        backgroundColor: '#fff',
         borderRadius: 12,
-        padding: 16,
-        marginVertical: 12,
+        padding: 20,
+        marginTop: 20,
+        marginBottom: 20,
+        marginHorizontal: 16,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
     },
     assignmentSectionTitle: {
-        fontSize: 16,
+        fontSize: 18,
         fontWeight: 'bold',
         color: '#1a1a1a',
-        marginBottom: 8,
+        marginBottom: 4,
+    },
+    assignmentSectionSubtitle: {
+        fontSize: 14,
+        color: '#666',
+        marginBottom: 16,
     },
     assignmentStats: {
         flexDirection: 'row',
         justifyContent: 'space-around',
-        marginBottom: 12,
+        marginBottom: 16,
+        paddingVertical: 12,
+        backgroundColor: '#f8f9fa',
+        borderRadius: 8,
+    },
+    assignmentStatItem: {
+        alignItems: 'center',
+    },
+    assignmentStatNumber: {
+        fontSize: 24,
+        fontWeight: 'bold',
+        color: '#007AFF',
+        marginBottom: 4,
+    },
+    assignmentStatLabel: {
+        fontSize: 12,
+        color: '#666',
+        textTransform: 'uppercase',
     },
     assignmentCount: {
         fontSize: 12,
@@ -666,6 +915,185 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     continueWorkflowButtonText: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: '600',
+    },
+    // Resource styles
+    resourcesContainer: {
+        backgroundColor: '#fff',
+        borderRadius: 12,
+        padding: 20,
+        marginHorizontal: 16,
+        marginBottom: 16,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
+    },
+    resourcesSectionTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#1a1a1a',
+        marginBottom: 4,
+    },
+    resourcesSectionSubtitle: {
+        fontSize: 14,
+        color: '#666',
+        marginBottom: 16,
+    },
+    resourceCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#f8f9fa',
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 12,
+        borderWidth: 1,
+        borderColor: '#e0e0e0',
+    },
+    resourceIconContainer: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        backgroundColor: '#fff',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 12,
+    },
+    resourceIcon: {
+        fontSize: 24,
+    },
+    resourceInfo: {
+        flex: 1,
+        marginRight: 8,
+    },
+    resourceTitle: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#1a1a1a',
+        marginBottom: 4,
+        lineHeight: 20,
+    },
+    resourceQuery: {
+        fontSize: 12,
+        color: '#666',
+        fontStyle: 'italic',
+    },
+    resourceArrow: {
+        fontSize: 20,
+        color: '#007AFF',
+        fontWeight: 'bold',
+    },
+    // Video player styles
+    videoCard: {
+        backgroundColor: '#fff',
+        borderRadius: 16,
+        marginBottom: 16,
+        overflow: 'hidden',
+        borderWidth: 2,
+        borderColor: '#007AFF',
+        shadowColor: '#007AFF',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 8,
+        elevation: 5,
+    },
+    videoHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 16,
+        backgroundColor: '#f8f9fa',
+        borderBottomWidth: 1,
+        borderBottomColor: '#e0e0e0',
+    },
+    videoIconContainer: {
+        width: 52,
+        height: 52,
+        borderRadius: 26,
+        backgroundColor: '#007AFF',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 12,
+        shadowColor: '#007AFF',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.3,
+        shadowRadius: 4,
+        elevation: 3,
+    },
+    videoIcon: {
+        fontSize: 24,
+    },
+    videoInfo: {
+        flex: 1,
+        marginRight: 8,
+    },
+    videoTitle: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#1a1a1a',
+        marginBottom: 4,
+        lineHeight: 22,
+    },
+    videoQuery: {
+        fontSize: 12,
+        color: '#666',
+        fontStyle: 'italic',
+    },
+    videoToggleContainer: {
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        backgroundColor: '#007AFF',
+        borderRadius: 8,
+    },
+    videoToggleText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    videoPlayerContainer: {
+        backgroundColor: '#000',
+        padding: 12,
+    },
+    videoPlayerWrapper: {
+        width: '100%',
+        aspectRatio: 16 / 9,
+        borderRadius: 12,
+        overflow: 'hidden',
+        backgroundColor: '#000',
+        borderWidth: 2,
+        borderColor: '#007AFF',
+    },
+    videoPlayer: {
+        flex: 1,
+        backgroundColor: '#000',
+    },
+    videoQueryExpanded: {
+        fontSize: 13,
+        color: '#fff',
+        marginTop: 12,
+        paddingHorizontal: 4,
+        fontStyle: 'italic',
+    },
+    videoFallbackContainer: {
+        padding: 24,
+        alignItems: 'center',
+        backgroundColor: '#f8f9fa',
+    },
+    videoFallbackText: {
+        fontSize: 14,
+        color: '#666',
+        marginBottom: 12,
+        textAlign: 'center',
+    },
+    videoFallbackButton: {
+        paddingHorizontal: 20,
+        paddingVertical: 10,
+        backgroundColor: '#007AFF',
+        borderRadius: 8,
+    },
+    videoFallbackButtonText: {
         color: '#fff',
         fontSize: 14,
         fontWeight: '600',

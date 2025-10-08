@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
     View,
     Text,
@@ -17,7 +17,8 @@ import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../navigation/AppNavigatorNew';
 import { useAuth } from '../../context/AuthContext';
-import { gradesService, AISubmission, StudentAssignment } from '../../services/gradesService';
+import { gradesService, AISubmission, StudentAssignment as GradesStudentAssignment } from '../../services/gradesService';
+import { afterSchoolService } from '../../services/afterSchoolService';
 
 const { width } = Dimensions.get('window');
 
@@ -34,7 +35,7 @@ export const GradeDetailsScreen: React.FC = () => {
     const [submission, setSubmission] = useState<AISubmission | null>(null);
     const [showFeedbackModal, setShowFeedbackModal] = useState(false);
     const [activeTab, setActiveTab] = useState<'overview' | 'feedback' | 'improvements'>('overview');
-    const [nextAssignment, setNextAssignment] = useState<StudentAssignment | null>(null);
+    const [nextAssignment, setNextAssignment] = useState<GradesStudentAssignment | null>(null);
     const [workflowContext, setWorkflowContext] = useState<{
         canContinue: boolean;
         nextAction: string;
@@ -43,6 +44,30 @@ export const GradeDetailsScreen: React.FC = () => {
         canContinue: false,
         nextAction: 'No next steps available'
     });
+
+    // Sanitize raw AI feedback to avoid leaking provider/system errors to users
+    const cleanAIText = useCallback((text?: string | null): string | null => {
+        if (!text || typeof text !== 'string') return text ?? null;
+        let t = text.trim();
+        // Remove known provider artifacts and overly-technical messages
+        const patterns: Array<RegExp | string> = [
+            /(?<=^|\n).*finish_reason\s*=\s*\d+.*$/gim,
+            /(?<=^|\n).*response\.text.*quick accessor.*$/gim,
+            /(?<=^|\n).*(safety system|content filter).*blocked.*$/gim,
+            /(?<=^|\n).*policy.*violation.*$/gim,
+            /(?<=^|\n).*model.*overloaded.*try again.*$/gim
+        ];
+        patterns.forEach(p => {
+            t = t.replace(p as any, '').trim();
+        });
+        // Collapse excessive whitespace
+        t = t.replace(/\n{3,}/g, '\n\n').trim();
+        // Provide a friendly fallback when text becomes empty
+        if (t.length === 0) {
+            return 'Feedback is not available yet. Please try again shortly.';
+        }
+        return t;
+    }, []);
 
     useEffect(() => {
         loadSubmissionDetails();
@@ -61,15 +86,20 @@ export const GradeDetailsScreen: React.FC = () => {
 
             // Load workflow context - find next available assignment
             try {
-                const assignments = await gradesService.getStudentAssignments(1, token, { limit: 20 });
+                const assignments = await afterSchoolService.getMyAssignments(
+                    token,
+                    { limit: 20 }
+                );
                 const availableAssignments = assignments.filter(a => a.status === 'assigned');
 
                 if (availableAssignments.length > 0) {
-                    setNextAssignment(availableAssignments[0]);
+                    // Cast structurally to the grades service type (fields used in UI overlap)
+                    const a = availableAssignments[0] as unknown as GradesStudentAssignment;
+                    setNextAssignment(a);
                     setWorkflowContext({
                         canContinue: true,
                         nextAction: 'Start next assignment',
-                        courseId: availableAssignments[0].course_id
+                        courseId: a.course_id
                     });
                 } else {
                     const canContinueLearning = assignments.some(a => a.status === 'graded');
@@ -180,6 +210,7 @@ export const GradeDetailsScreen: React.FC = () => {
         if (!submission) return null;
 
         const performance = submission.ai_score ? getPerformanceLevel(submission.ai_score) : null;
+        const previewFeedback = cleanAIText(submission.ai_feedback);
 
         return (
             <View style={styles.tabContent}>
@@ -222,13 +253,7 @@ export const GradeDetailsScreen: React.FC = () => {
                             <View style={styles.infoContent}>
                                 <Text style={styles.infoLabel}>Submitted</Text>
                                 <Text style={styles.infoValue}>
-                                    {new Date(submission.submitted_at).toLocaleDateString('en-US', {
-                                        year: 'numeric',
-                                        month: 'long',
-                                        day: 'numeric',
-                                        hour: '2-digit',
-                                        minute: '2-digit'
-                                    })}
+                                    {gradesService.formatRelativeTime(submission.submitted_at)}
                                 </Text>
                             </View>
                         </View>
@@ -262,12 +287,7 @@ export const GradeDetailsScreen: React.FC = () => {
                                 <View style={styles.infoContent}>
                                     <Text style={styles.infoLabel}>Processed</Text>
                                     <Text style={styles.infoValue}>
-                                        {new Date(submission.processed_at).toLocaleDateString('en-US', {
-                                            month: 'short',
-                                            day: 'numeric',
-                                            hour: '2-digit',
-                                            minute: '2-digit'
-                                        })}
+                                        {gradesService.formatRelativeTime(submission.processed_at)}
                                     </Text>
                                 </View>
                             </View>
@@ -276,11 +296,11 @@ export const GradeDetailsScreen: React.FC = () => {
                 </View>
 
                 {/* Quick Feedback Preview */}
-                {typeof submission.ai_feedback === 'string' && submission.ai_feedback.trim().length > 0 && (
+                {typeof previewFeedback === 'string' && previewFeedback.trim().length > 0 && (
                     <View style={styles.previewSection}>
                         <Text style={styles.sectionTitle}>AI Feedback Preview</Text>
                         <Text style={styles.previewText} numberOfLines={3}>
-                            {submission.ai_feedback}
+                            {previewFeedback}
                         </Text>
                         <TouchableOpacity
                             style={styles.readMoreButton}
@@ -305,7 +325,7 @@ export const GradeDetailsScreen: React.FC = () => {
                         <Text style={styles.sectionTitle}>AI Feedback</Text>
                         <View style={styles.feedbackContent}>
                             <Text style={styles.feedbackText}>
-                                {submission.ai_feedback}
+                                {cleanAIText(submission.ai_feedback)}
                             </Text>
                         </View>
                     </View>
@@ -390,29 +410,71 @@ export const GradeDetailsScreen: React.FC = () => {
 
                 {/* Action Buttons */}
                 <View style={styles.actionsSection}>
-                    <TouchableOpacity
-                        style={styles.actionButton}
-                        onPress={() => {
-                            // Navigate back to lesson or course
-                            navigation.navigate('LessonView', {
-                                courseId: submission.course_id,
-                                lessonId: submission.lesson_id,
-                                lessonTitle: 'Lesson',
-                                courseTitle: 'Course'
-                            });
-                        }}
-                    >
-                        <Ionicons name="book-outline" size={20} color="#FFFFFF" />
-                        <Text style={styles.actionButtonText}>Review Lesson</Text>
-                    </TouchableOpacity>
+                    {/* Only show Review Lesson if we have a valid lesson_id */}
+                    {submission.lesson_id && (
+                        <TouchableOpacity
+                            style={styles.actionButton}
+                            onPress={() => {
+                                // Navigate back to lesson
+                                navigation.navigate('LessonView', {
+                                    courseId: submission.course_id,
+                                    lessonId: submission.lesson_id,
+                                    lessonTitle: 'Lesson',
+                                    courseTitle: 'Course'
+                                });
+                            }}
+                        >
+                            <Ionicons name="book-outline" size={20} color="#FFFFFF" />
+                            <Text style={styles.actionButtonText}>Review Lesson</Text>
+                        </TouchableOpacity>
+                    )}
+
+                    {/* Show Review Course button if no lesson_id but has course_id */}
+                    {!submission.lesson_id && submission.course_id && (
+                        <TouchableOpacity
+                            style={styles.actionButton}
+                            onPress={() => {
+                                // Navigate to course details
+                                navigation.navigate('CourseDetails', {
+                                    courseId: submission.course_id,
+                                    courseTitle: 'Course'
+                                });
+                            }}
+                        >
+                            <Ionicons name="book-outline" size={20} color="#FFFFFF" />
+                            <Text style={styles.actionButtonText}>Review Course</Text>
+                        </TouchableOpacity>
+                    )}
+
+                    {/* Retry Assignment Button - only show for assignments */}
+                    {submission.assignment_id && (
+                        <TouchableOpacity
+                            style={[styles.actionButton, styles.retryButton]}
+                            onPress={() => {
+                                // Navigate to CourseAssignment screen to retry
+                                navigation.navigate('CourseAssignment', {
+                                    courseId: submission.course_id,
+                                    courseTitle: 'Course',
+                                    assignmentId: submission.assignment_id,
+                                    startWorkflow: true
+                                });
+                            }}
+                        >
+                            <Ionicons name="refresh" size={20} color="#FFFFFF" />
+                            <Text style={styles.actionButtonText}>Retry Assignment</Text>
+                        </TouchableOpacity>
+                    )}
+
                     <TouchableOpacity
                         style={[styles.actionButton, styles.actionButtonSecondary]}
                         onPress={() => {
-                            // Navigate to practice or retry
+                            // Navigate to practice using course/lesson/block context (no server session needed)
+                            const fakeSessionId = Math.floor(Math.random() * 1_000_000);
                             navigation.navigate('StudySession', {
-                                sessionId: submission.session_id,
+                                sessionId: fakeSessionId,
                                 courseId: submission.course_id,
-                                lessonId: submission.lesson_id,
+                                lessonId: submission.lesson_id || undefined,
+                                blockId: submission.block_id || undefined,
                                 lessonTitle: 'Practice Session',
                                 courseTitle: 'Course'
                             });
