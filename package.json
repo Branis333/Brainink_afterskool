@@ -28,6 +28,7 @@
     "@babel/core": "^7.20.0",
     "@types/prop-types": "^15.7.15",
     "@types/react": "~19.1.10",
+    "babel-preset-expo": "^54.0.3",
     "typescript": "~5.9.2"
   },
   "private": true

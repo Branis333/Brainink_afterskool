@@ -3,7 +3,7 @@
  * Active study session interface with lesson content, progress tracking, and session controls
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, ReactNode, useMemo } from 'react';
 import {
     View,
     Text,
@@ -15,6 +15,7 @@ import {
     Dimensions,
     Modal,
     Linking,
+    Pressable,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -49,6 +50,13 @@ interface Props {
     route: RouteProp_;
 }
 
+interface StudySection {
+    id: string;
+    title: string;
+    icon: string;
+    content: ReactNode;
+}
+
 const { width, height } = Dimensions.get('window');
 
 export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
@@ -61,10 +69,13 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
     const [course, setCourse] = useState<CourseWithLessons | CourseWithBlocks | null>(null);
     const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
     const [loading, setLoading] = useState(true);
-    const [completionPercentage, setCompletionPercentage] = useState(0);
     const [markingDone, setMarkingDone] = useState(false);
     const [expandedVideoIndex, setExpandedVideoIndex] = useState<number | null>(null);
     const [isAlreadyCompleted, setIsAlreadyCompleted] = useState(false);
+    const [isMenuVisible, setMenuVisible] = useState(false);
+    const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
+
+    const scrollViewRef = useRef<ScrollView>(null);
 
     // Load content data (mark-done model - no session required)
     const loadSessionData = async () => {
@@ -133,8 +144,6 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                     updated_at: new Date().toISOString()
                 });
             }
-
-            setCompletionPercentage(0); // Start at 0, will be updated when marked as done
         } catch (error) {
             console.error('Error loading session data:', error);
             Alert.alert(
@@ -172,10 +181,8 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
             }
 
             await afterSchoolService.markStudySessionDone(blockId, courseId, token);
-
             // Immediately reflect completed state
             setIsAlreadyCompleted(true);
-            setCompletionPercentage(100);
 
             // When leaving this screen, ensure callers can force-refresh
             const refreshTs = Date.now();
@@ -250,13 +257,6 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
     const markContentCompleted = () => {
         markAsDone();
     };
-
-    // Update progress
-    const updateProgress = (percentage: number) => {
-        setCompletionPercentage(Math.min(100, Math.max(0, percentage)));
-    };
-
-
 
     // Format time
     const formatTime = (seconds: number): string => {
@@ -435,9 +435,9 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
 
         return (
             <View style={styles.resourcesContainer}>
-                <Text style={styles.resourcesSectionTitle}>📚 Article Resources</Text>
+                <Text style={styles.resourcesSectionTitle}>� Related Links</Text>
                 <Text style={styles.resourcesSectionSubtitle}>
-                    Read these articles for deeper understanding
+                    Explore these resources for deeper understanding
                 </Text>
                 {articleResources.map((resource: any, index: number) => (
                     <TouchableOpacity
@@ -464,6 +464,216 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
             </View>
         );
     };
+
+    const relevantAssignments = useMemo(() => {
+        if (!assignments || assignments.length === 0) {
+            return [];
+        }
+
+        if (blockId) {
+            return assignments.filter((a) => {
+                const assignmentBlockId = a.assignment?.block_id || (a as any).block_id;
+                return assignmentBlockId === blockId;
+            });
+        }
+
+        return assignments;
+    }, [assignments, blockId]);
+
+    const renderAssignmentsSection = () => {
+        const statusRank: Record<string, number> = {
+            assigned: 0,
+            in_progress: 1,
+            submitted: 2,
+            graded: 3,
+        };
+
+        const sortedAssignments = [...relevantAssignments].sort((a, b) => {
+            const rankA = statusRank[a.status as keyof typeof statusRank] ?? 4;
+            const rankB = statusRank[b.status as keyof typeof statusRank] ?? 4;
+            return rankA - rankB;
+        });
+
+        if (sortedAssignments.length === 0) {
+            return (
+                <View style={styles.assignmentsCard}>
+                    <Text style={styles.assignmentsTitle}>Assignments & Exercises</Text>
+                    <Text style={styles.assignmentsSubtitle}>
+                        No assignments have been assigned for this section yet. Check back later for new exercises.
+                    </Text>
+                    <TouchableOpacity
+                        style={styles.assignmentsAllButton}
+                        onPress={() => navigation.navigate('CourseAssignment', { courseId, courseTitle })}
+                    >
+                        <Text style={styles.assignmentsAllButtonText}>Browse Course Assignments</Text>
+                    </TouchableOpacity>
+                </View>
+            );
+        }
+
+        return (
+            <View style={styles.assignmentsCard}>
+                <Text style={styles.assignmentsTitle}>Assignments & Exercises</Text>
+                <Text style={styles.assignmentsSubtitle}>
+                    Use these tasks to practice what you've learned in this section.
+                </Text>
+                {sortedAssignments.map((assignment) => {
+                    const title = assignment.assignment?.title || `Assignment ${assignment.assignment_id}`;
+                    const statusLabel = assignment.status?.replace(/_/g, ' ') ?? 'unknown';
+                    const isPending = assignment.status === 'assigned';
+
+                    return (
+                        <TouchableOpacity
+                            key={assignment.assignment_id}
+                            style={[styles.assignmentRow, isPending && styles.assignmentRowPending]}
+                            onPress={() => navigateToAssignment(assignment)}
+                        >
+                            <View style={styles.assignmentIconContainer}>
+                                <Text style={styles.assignmentIcon}>📝</Text>
+                            </View>
+                            <View style={styles.assignmentInfo}>
+                                <Text style={styles.assignmentTitle}>{title}</Text>
+                                <Text style={styles.assignmentStatusText}>
+                                    Status: {statusLabel.charAt(0).toUpperCase() + statusLabel.slice(1)}
+                                </Text>
+                            </View>
+                            <Text
+                                style={[
+                                    styles.assignmentAction,
+                                    isPending ? styles.assignmentActionPrimary : styles.assignmentActionSecondary,
+                                ]}
+                            >
+                                {isPending ? 'Start' : 'Review'}
+                            </Text>
+                        </TouchableOpacity>
+                    );
+                })}
+                <TouchableOpacity
+                    style={styles.assignmentsAllButton}
+                    onPress={() => navigation.navigate('CourseAssignment', { courseId, courseTitle })}
+                >
+                    <Text style={styles.assignmentsAllButtonText}>View All Assignments</Text>
+                </TouchableOpacity>
+            </View>
+        );
+    };
+
+    const sections = useMemo<StudySection[]>(() => {
+        const items: StudySection[] = [];
+
+        if (block?.learning_objectives?.length || lesson?.learning_objectives) {
+            items.push({
+                id: 'learning-objectives',
+                title: 'Learning Objectives',
+                icon: '🎯',
+                content: (
+                    <View style={styles.objectivesCard}>
+                        <Text style={styles.objectivesTitle}>Learning Objectives</Text>
+                        {block?.learning_objectives?.length ? (
+                            <Text style={styles.objectivesText}>• {block.learning_objectives.join('\n• ')}</Text>
+                        ) : (
+                            <Text style={styles.objectivesText}>{lesson?.learning_objectives}</Text>
+                        )}
+                    </View>
+                )
+            });
+        }
+
+        items.push({
+            id: 'course-content',
+            title: block ? 'Block Content' : 'Lesson Content',
+            icon: '📘',
+            content: (
+                <View style={styles.lessonContentCard}>
+                    <Text style={styles.lessonContentTitle}>
+                        {block ? 'Block Content' : 'Lesson Content'}
+                    </Text>
+                    {(block?.content || lesson?.content) ? (
+                        <Text style={styles.lessonContentText}>
+                            {block?.content || lesson?.content}
+                        </Text>
+                    ) : (
+                        <View style={styles.noContentContainer}>
+                            <Text style={styles.noContentText}>No content available</Text>
+                            <Text style={styles.noContentSubtext}>
+                                Content for this {block ? 'block' : 'lesson'} will be added soon
+                            </Text>
+                        </View>
+                    )}
+                </View>
+            )
+        });
+
+        const videoSection = renderVideoResources();
+        if (videoSection) {
+            items.push({
+                id: 'video-resources',
+                title: 'Video Resources',
+                icon: '🎥',
+                content: videoSection
+            });
+        }
+
+        const linksSection = renderArticleResources();
+        if (linksSection) {
+            items.push({
+                id: 'related-links',
+                title: 'Related Links',
+                icon: '🔗',
+                content: linksSection
+            });
+        }
+
+        items.push({
+            id: 'assignments',
+            title: 'Assignments & Exercises',
+            icon: '📝',
+            content: renderAssignmentsSection()
+        });
+
+        items.push({
+            id: 'study-tips',
+            title: 'Study Tips',
+            icon: '💡',
+            content: (
+                <View style={styles.tipsCard}>
+                    <Text style={styles.tipsTitle}>Study Tips</Text>
+                    <Text style={styles.tipsText}>
+                        • Take notes while studying{'\n'}
+                        • Ask questions if you don't understand{'\n'}
+                        • Practice what you learn{'\n'}
+                        • Take breaks when needed{'\n'}
+                        • Review the material after completing
+                    </Text>
+                </View>
+            )
+        });
+
+        return items;
+    }, [block, lesson, expandedVideoIndex, relevantAssignments]);
+
+    useEffect(() => {
+        if (sections.length === 0) {
+            if (activeSectionId !== null) {
+                setActiveSectionId(null);
+            }
+            return;
+        }
+
+        if (!activeSectionId || !sections.some(section => section.id === activeSectionId)) {
+            setActiveSectionId(sections[0].id);
+        }
+    }, [sections, activeSectionId]);
+
+    useEffect(() => {
+        if (!activeSectionId) {
+            return;
+        }
+
+        requestAnimationFrame(() => {
+            scrollViewRef.current?.scrollTo({ y: 0, animated: false });
+        });
+    }, [activeSectionId]);
 
     // Render loading state
     if (loading) {
@@ -494,19 +704,33 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
     }
 
     // Render session header
-    const renderSessionHeader = () => (
-        <View style={styles.sessionHeader}>
-            {/* Minimalist top header - just back button */}
-            <View style={styles.headerTop}>
-                <TouchableOpacity
-                    style={styles.backButton}
-                    onPress={handleBackPress}
-                >
-                    <Text style={styles.backButtonText}>← Back</Text>
-                </TouchableOpacity>
+    const renderSessionHeader = () => {
+        const primaryTitle = blockTitle || lessonTitle || 'Study Session';
+        const subtitleText = courseTitle || 'Course';
+
+        return (
+            <View style={styles.sessionHeader}>
+                <View style={styles.headerTop}>
+                    <TouchableOpacity
+                        style={styles.backButton}
+                        onPress={handleBackPress}
+                    >
+                        <Text style={styles.backButtonText}>← Back</Text>
+                    </TouchableOpacity>
+                    <View style={styles.headerTitleContainer}>
+                        <Text style={styles.headerSubtitle} numberOfLines={1}>{subtitleText}</Text>
+                        <Text style={styles.headerTitle} numberOfLines={1}>{primaryTitle}</Text>
+                    </View>
+                    <TouchableOpacity
+                        style={styles.menuButton}
+                        onPress={() => setMenuVisible(true)}
+                    >
+                        <Text style={styles.menuIcon}>☰</Text>
+                    </TouchableOpacity>
+                </View>
             </View>
-        </View>
-    );
+        );
+    };
 
     // Render session footer (simplified)
     const renderSessionFooter = () => (
@@ -575,108 +799,144 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
         </View>
     );
 
-    // Render content (lesson or block)
-    const renderContentBody = () => (
-        <ScrollView style={styles.contentScrollView} showsVerticalScrollIndicator={false}>
-            <View style={styles.contentContainer}>
-                {/* Learning Objectives */}
-                {block?.learning_objectives?.length > 0 && (
-                    <View style={styles.objectivesCard}>
-                        <Text style={styles.objectivesTitle}>Learning Objectives</Text>
-                        <Text style={styles.objectivesText}>• {block.learning_objectives.join('\n• ')}</Text>
-                    </View>
-                )}
-                {lesson?.learning_objectives && (
-                    <View style={styles.objectivesCard}>
-                        <Text style={styles.objectivesTitle}>Learning Objectives</Text>
-                        <Text style={styles.objectivesText}>{lesson.learning_objectives}</Text>
-                    </View>
-                )}
-
-                {/* Video Resources */}
-                {renderVideoResources()}
-
-                {/* Content */}
-                <View style={styles.lessonContentCard}>
-                    <Text style={styles.lessonContentTitle}>
-                        {block ? 'Block Content' : 'Lesson Content'}
-                    </Text>
-                    {(block?.content || lesson?.content) ? (
-                        <Text style={styles.lessonContentText}>
-                            {block?.content || lesson?.content}
+    // Render content (lesson or block) with paginated sections
+    const renderContentBody = () => {
+        if (sections.length === 0) {
+            return (
+                <ScrollView
+                    ref={scrollViewRef}
+                    style={styles.contentScrollView}
+                    contentContainerStyle={styles.emptyStateContainer}
+                    showsVerticalScrollIndicator={false}
+                >
+                    <View style={styles.emptyStateCard}>
+                        <Text style={styles.emptyStateTitle}>Content coming soon</Text>
+                        <Text style={styles.emptyStateSubtitle}>
+                            We're still preparing materials for this study session. Please check back later.
                         </Text>
-                    ) : (
-                        <View style={styles.noContentContainer}>
-                            <Text style={styles.noContentText}>No content available</Text>
-                            <Text style={styles.noContentSubtext}>
-                                Content for this {block ? 'block' : 'lesson'} will be added soon
+                    </View>
+                </ScrollView>
+            );
+        }
+
+        const activeSection =
+            sections.find(section => section.id === activeSectionId) ?? sections[0];
+        const currentIndex = sections.findIndex(section => section.id === activeSection.id);
+        const previousSection = currentIndex > 0 ? sections[currentIndex - 1] : null;
+        const nextSection = currentIndex < sections.length - 1 ? sections[currentIndex + 1] : null;
+
+        return (
+            <ScrollView
+                ref={scrollViewRef}
+                style={styles.contentScrollView}
+                contentContainerStyle={styles.pagedContentContainer}
+                showsVerticalScrollIndicator={false}
+            >
+                <View style={styles.sectionIntroCard}>
+                    <Text style={styles.sectionIntroBadge}>
+                        {currentIndex + 1} of {sections.length}
+                    </Text>
+                    <Text style={styles.sectionIntroTitle}>
+                        {activeSection.icon} {activeSection.title}
+                    </Text>
+                </View>
+                {activeSection.content}
+                <View style={styles.sectionPagerControls}>
+                    {previousSection ? (
+                        <TouchableOpacity
+                            style={[styles.pagerButton, styles.pagerButtonSecondary]}
+                            onPress={() => setActiveSectionId(previousSection.id)}
+                        >
+                            <Text style={styles.pagerButtonText}>
+                                ← {previousSection.title}
                             </Text>
-                        </View>
+                        </TouchableOpacity>
+                    ) : (
+                        <View style={styles.pagerButtonSpacer} />
+                    )}
+                    {nextSection ? (
+                        <TouchableOpacity
+                            style={[styles.pagerButton, styles.pagerButtonPrimary]}
+                            onPress={() => setActiveSectionId(nextSection.id)}
+                        >
+                            <Text style={[styles.pagerButtonText, styles.pagerButtonTextPrimary]}>
+                                {nextSection.title} →
+                            </Text>
+                        </TouchableOpacity>
+                    ) : (
+                        <View style={styles.pagerButtonSpacer} />
                     )}
                 </View>
-
-                {/* Article Resources */}
-                {renderArticleResources()}
-
-                {/* Progress Tracking */}
-                <View style={styles.progressCard}>
-                    <Text style={styles.progressCardTitle}>Progress Tracking</Text>
-                    <Text style={styles.progressCardDescription}>
-                        Update your progress as you work through the lesson content.
-                    </Text>
-
-                    <View style={styles.progressButtons}>
-                        <TouchableOpacity
-                            style={styles.progressOptionButton}
-                            onPress={() => updateProgress(25)}
-                        >
-                            <Text style={styles.progressOptionText}>25% - Getting Started</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={styles.progressOptionButton}
-                            onPress={() => updateProgress(50)}
-                        >
-                            <Text style={styles.progressOptionText}>50% - Halfway Through</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={styles.progressOptionButton}
-                            onPress={() => updateProgress(75)}
-                        >
-                            <Text style={styles.progressOptionText}>75% - Almost Done</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={styles.progressOptionButton}
-                            onPress={() => updateProgress(100)}
-                        >
-                            <Text style={styles.progressOptionText}>100% - Completed</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-
-                {/* Study Tips */}
-                <View style={styles.tipsCard}>
-                    <Text style={styles.tipsTitle}>Study Tips</Text>
-                    <Text style={styles.tipsText}>
-                        • Take notes while studying{'\n'}
-                        • Ask questions if you don't understand{'\n'}
-                        • Practice what you learn{'\n'}
-                        • Take breaks when needed{'\n'}
-                        • Review the material after completing
-                    </Text>
-                </View>
-
-                <View style={{ height: 100 }} />
-            </View>
-        </ScrollView>
-    );
+                <View style={{ height: 80 }} />
+            </ScrollView>
+        );
+    };
 
 
 
     return (
         <SafeAreaView style={styles.container}>
+            <Modal
+                visible={isMenuVisible}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setMenuVisible(false)}
+            >
+                <View style={styles.menuOverlay}>
+                    <View style={styles.sideMenuContainer}>
+                        <View style={styles.sideMenuHeader}>
+                            <Text style={styles.sideMenuHeaderLabel}>Study Navigation</Text>
+                            <TouchableOpacity onPress={() => setMenuVisible(false)}>
+                                <Text style={styles.sideMenuClose}>✕</Text>
+                            </TouchableOpacity>
+                        </View>
+                        <View style={styles.sideMenuCourseInfo}>
+                            <Text style={styles.sideMenuCourseTitle} numberOfLines={1}>{courseTitle}</Text>
+                            <Text style={styles.sideMenuLessonTitle} numberOfLines={2}>{blockTitle || lessonTitle}</Text>
+                        </View>
+                        <Text style={styles.sideMenuSectionTitle}>Course Outline</Text>
+                        <View style={styles.sideMenuItemsWrapper}>
+                            {sections.map((section, index) => {
+                                const isActive = section.id === activeSectionId;
+                                const isLast = index === sections.length - 1;
+                                return (
+                                    <TouchableOpacity
+                                        key={section.id}
+                                        style={[styles.sideMenuItem, isActive && styles.sideMenuItemActive]}
+                                        onPress={() => {
+                                            setActiveSectionId(section.id);
+                                            setMenuVisible(false);
+                                        }}
+                                    >
+                                        <View style={styles.sideMenuConnectorColumn}>
+                                            <View style={[styles.sideMenuConnectorLine, isLast && styles.sideMenuConnectorLineHidden]} />
+                                            <View style={[styles.sideMenuConnectorDot, isActive && styles.sideMenuConnectorDotActive]} />
+                                        </View>
+                                        <Text style={styles.sideMenuItemIndex}>{index + 1}.</Text>
+                                        <View style={styles.sideMenuItemContent}>
+                                            <Text
+                                                style={[styles.sideMenuItemText, isActive && styles.sideMenuItemTextActive]}
+                                                numberOfLines={1}
+                                            >
+                                                {section.icon} {section.title}
+                                            </Text>
+                                            {isActive && (
+                                                <Text style={styles.sideMenuItemHint}>Currently viewing</Text>
+                                            )}
+                                        </View>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                            {sections.length === 0 && (
+                                <View style={styles.sideMenuEmptyState}>
+                                    <Text style={styles.sideMenuEmptyStateText}>No sections available yet.</Text>
+                                </View>
+                            )}
+                        </View>
+                    </View>
+                    <Pressable style={styles.menuBackdrop} onPress={() => setMenuVisible(false)} />
+                </View>
+            </Modal>
             {renderSessionHeader()}
             {renderContentBody()}
             {renderSessionFooter()}
@@ -733,6 +993,7 @@ const styles = StyleSheet.create({
     headerTop: {
         flexDirection: 'row',
         alignItems: 'center',
+        justifyContent: 'space-between',
     },
     backButton: {
         padding: 8,
@@ -741,6 +1002,30 @@ const styles = StyleSheet.create({
         fontSize: 16,
         color: '#007AFF',
         fontWeight: '600',
+    },
+    headerTitleContainer: {
+        flex: 1,
+        marginHorizontal: 12,
+    },
+    headerSubtitle: {
+        fontSize: 12,
+        color: '#6b7280',
+        marginBottom: 2,
+    },
+    headerTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#111827',
+    },
+    menuButton: {
+        padding: 8,
+        borderRadius: 8,
+        backgroundColor: '#F1F5F9',
+    },
+    menuIcon: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#1D4ED8',
     },
     // Footer styles (moved from header) - Minimized to 1/3 size
     sessionFooter: {
@@ -933,45 +1218,6 @@ const styles = StyleSheet.create({
         color: '#999',
         textAlign: 'center',
     },
-    progressCard: {
-        backgroundColor: '#fff',
-        borderRadius: 12,
-        padding: 20,
-        marginBottom: 16,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 4,
-        elevation: 2,
-    },
-    progressCardTitle: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        color: '#1a1a1a',
-        marginBottom: 8,
-    },
-    progressCardDescription: {
-        fontSize: 14,
-        color: '#666',
-        marginBottom: 16,
-        lineHeight: 20,
-    },
-    progressButtons: {
-        gap: 8,
-    },
-    progressOptionButton: {
-        backgroundColor: '#f8f9fa',
-        borderRadius: 8,
-        paddingVertical: 12,
-        paddingHorizontal: 16,
-        borderWidth: 1,
-        borderColor: '#dee2e6',
-    },
-    progressOptionText: {
-        fontSize: 14,
-        color: '#495057',
-        textAlign: 'center',
-    },
     tipsCard: {
         backgroundColor: '#e3f2fd',
         borderRadius: 12,
@@ -988,6 +1234,295 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: '#1565c0',
         lineHeight: 20,
+    },
+    emptyStateContainer: {
+        flexGrow: 1,
+        padding: 24,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    emptyStateCard: {
+        backgroundColor: '#fff',
+        borderRadius: 16,
+        padding: 24,
+        alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.08,
+        shadowRadius: 8,
+        elevation: 4,
+    },
+    emptyStateTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#1f2937',
+        marginBottom: 8,
+    },
+    emptyStateSubtitle: {
+        fontSize: 14,
+        color: '#6b7280',
+        textAlign: 'center',
+        lineHeight: 20,
+    },
+    pagedContentContainer: {
+        padding: 20,
+        paddingBottom: 40,
+    },
+    sectionIntroCard: {
+        backgroundColor: '#DBEAFE',
+        borderRadius: 14,
+        padding: 16,
+        marginBottom: 16,
+    },
+    sectionIntroBadge: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#1D4ED8',
+        marginBottom: 4,
+        textTransform: 'uppercase',
+        letterSpacing: 0.8,
+    },
+    sectionIntroTitle: {
+        fontSize: 20,
+        fontWeight: '700',
+        color: '#1E3A8A',
+    },
+    sectionPagerControls: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginTop: 24,
+        gap: 12,
+    },
+    pagerButton: {
+        flex: 1,
+        borderRadius: 10,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        alignItems: 'center',
+    },
+    pagerButtonSecondary: {
+        backgroundColor: '#F1F5F9',
+    },
+    pagerButtonPrimary: {
+        backgroundColor: '#2563EB',
+    },
+    pagerButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#1E3A8A',
+    },
+    pagerButtonTextPrimary: {
+        color: '#fff',
+    },
+    pagerButtonSpacer: {
+        flex: 1,
+    },
+    assignmentsCard: {
+        backgroundColor: '#fff',
+        borderRadius: 12,
+        padding: 20,
+        marginBottom: 16,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.08,
+        shadowRadius: 6,
+        elevation: 2,
+    },
+    assignmentsTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#1f2937',
+        marginBottom: 6,
+    },
+    assignmentsSubtitle: {
+        fontSize: 14,
+        color: '#6b7280',
+        marginBottom: 16,
+        lineHeight: 20,
+    },
+    assignmentRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 12,
+        paddingHorizontal: 12,
+        borderRadius: 10,
+        backgroundColor: '#F8FAFC',
+        marginBottom: 10,
+    },
+    assignmentRowPending: {
+        backgroundColor: '#E0F2FE',
+        borderWidth: 1,
+        borderColor: '#38BDF8',
+    },
+    assignmentIconContainer: {
+        width: 42,
+        height: 42,
+        borderRadius: 21,
+        backgroundColor: '#DBEAFE',
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 12,
+    },
+    assignmentIcon: {
+        fontSize: 20,
+    },
+    assignmentInfo: {
+        flex: 1,
+    },
+    assignmentTitle: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#1f2937',
+        marginBottom: 4,
+    },
+    assignmentStatusText: {
+        fontSize: 12,
+        color: '#6b7280',
+        textTransform: 'capitalize',
+    },
+    assignmentAction: {
+        fontSize: 13,
+        fontWeight: '600',
+    },
+    assignmentActionPrimary: {
+        color: '#2563EB',
+    },
+    assignmentActionSecondary: {
+        color: '#64748B',
+    },
+    assignmentsAllButton: {
+        marginTop: 8,
+        paddingVertical: 12,
+        borderRadius: 10,
+        backgroundColor: '#1D4ED8',
+        alignItems: 'center',
+    },
+    assignmentsAllButtonText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#fff',
+    },
+    menuOverlay: {
+        flex: 1,
+        flexDirection: 'row',
+        backgroundColor: 'rgba(15, 23, 42, 0.35)',
+    },
+    menuBackdrop: {
+        flex: 1,
+    },
+    sideMenuContainer: {
+        width: Math.min(width * 0.78, 340),
+        backgroundColor: '#fff',
+        paddingVertical: 24,
+        paddingHorizontal: 20,
+        shadowColor: '#000',
+        shadowOffset: { width: -2, height: 0 },
+        shadowOpacity: 0.2,
+        shadowRadius: 10,
+        elevation: 8,
+    },
+    sideMenuHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 16,
+    },
+    sideMenuHeaderLabel: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#1f2937',
+    },
+    sideMenuClose: {
+        fontSize: 18,
+        color: '#64748B',
+        padding: 4,
+    },
+    sideMenuCourseInfo: {
+        marginBottom: 24,
+    },
+    sideMenuCourseTitle: {
+        fontSize: 14,
+        color: '#94A3B8',
+        marginBottom: 4,
+    },
+    sideMenuLessonTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#1f2937',
+    },
+    sideMenuSectionTitle: {
+        fontSize: 13,
+        color: '#94A3B8',
+        textTransform: 'uppercase',
+        letterSpacing: 1.2,
+        marginBottom: 12,
+    },
+    sideMenuItemsWrapper: {
+        paddingBottom: 16,
+    },
+    sideMenuItem: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        paddingVertical: 10,
+        paddingHorizontal: 12,
+        borderRadius: 10,
+        marginBottom: 8,
+    },
+    sideMenuItemActive: {
+        backgroundColor: '#EEF2FF',
+    },
+    sideMenuItemIndex: {
+        width: 24,
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#6366F1',
+    },
+    sideMenuItemContent: {
+        flex: 1,
+    },
+    sideMenuItemText: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#1f2937',
+    },
+    sideMenuItemTextActive: {
+        color: '#4338CA',
+    },
+    sideMenuItemHint: {
+        marginTop: 4,
+        fontSize: 12,
+        color: '#6366F1',
+    },
+    sideMenuEmptyState: {
+        paddingVertical: 24,
+    },
+    sideMenuEmptyStateText: {
+        fontSize: 14,
+        color: '#6b7280',
+    },
+    sideMenuConnectorColumn: {
+        width: 18,
+        alignItems: 'center',
+        marginRight: 8,
+    },
+    sideMenuConnectorLine: {
+        flex: 1,
+        width: 2,
+        backgroundColor: '#E5E7EB',
+    },
+    sideMenuConnectorLineHidden: {
+        opacity: 0,
+    },
+    sideMenuConnectorDot: {
+        width: 10,
+        height: 10,
+        borderRadius: 5,
+        backgroundColor: '#CBD5F5',
+        marginTop: 4,
+    },
+    sideMenuConnectorDotActive: {
+        backgroundColor: '#4338CA',
     },
     modalOverlay: {
         flex: 1,
