@@ -345,7 +345,18 @@ export const GradeDetailsScreen: React.FC = () => {
                         <View style={styles.strengthsContent}>
                             <Ionicons name="checkmark-circle" size={20} color="#10B981" />
                             <Text style={styles.strengthsText}>
-                                {submission.ai_strengths}
+                                {(() => {
+                                    try {
+                                        // Parse JSON array from database
+                                        const strengths = JSON.parse(submission.ai_strengths);
+                                        if (Array.isArray(strengths)) {
+                                            return strengths.map((s, i) => `${i + 1}. ${s}`).join('\n');
+                                        }
+                                    } catch {
+                                        // Fallback to displaying as-is if not valid JSON
+                                    }
+                                    return submission.ai_strengths;
+                                })()}
                             </Text>
                         </View>
                     </View>
@@ -357,7 +368,18 @@ export const GradeDetailsScreen: React.FC = () => {
                         <View style={styles.correctionsContent}>
                             <Ionicons name="alert-circle" size={20} color="#F59E0B" />
                             <Text style={styles.correctionsText}>
-                                {submission.ai_corrections}
+                                {(() => {
+                                    try {
+                                        // Parse JSON array from database
+                                        const corrections = JSON.parse(submission.ai_corrections);
+                                        if (Array.isArray(corrections)) {
+                                            return corrections.map((c, i) => `${i + 1}. ${c}`).join('\n');
+                                        }
+                                    } catch {
+                                        // Fallback to displaying as-is if not valid JSON
+                                    }
+                                    return submission.ai_corrections;
+                                })()}
                             </Text>
                         </View>
                     </View>
@@ -377,7 +399,18 @@ export const GradeDetailsScreen: React.FC = () => {
                         <View style={styles.improvementsContent}>
                             <Ionicons name="bulb" size={20} color="#8B5CF6" />
                             <Text style={styles.improvementsText}>
-                                {submission.ai_improvements}
+                                {(() => {
+                                    try {
+                                        // Parse JSON array from database
+                                        const improvements = JSON.parse(submission.ai_improvements);
+                                        if (Array.isArray(improvements)) {
+                                            return improvements.map((imp, i) => `${i + 1}. ${imp}`).join('\n');
+                                        }
+                                    } catch {
+                                        // Fallback to displaying as-is if not valid JSON
+                                    }
+                                    return submission.ai_improvements;
+                                })()}
                             </Text>
                         </View>
                     </View>

@@ -27,6 +27,7 @@ import {
     CourseListResponse,
     StudentAssignment
 } from '../../services/afterSchoolService';
+import { TabBarWrapper } from '../../components/TabBarWrapper';
 
 type NavigationProp = NativeStackNavigationProp<any>;
 
@@ -463,69 +464,71 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
     }
 
     return (
-        <SafeAreaView style={styles.container}>
-            {/* Header */}
-            <View style={styles.header}>
-                <TouchableOpacity
-                    style={styles.backButton}
-                    onPress={() => navigation.goBack()}
-                >
-                    <Text style={styles.backButtonText}>← Back</Text>
-                </TouchableOpacity>
-                <Text style={styles.headerTitle}>Browse Courses</Text>
-            </View>
-
-            <ScrollView
-                style={styles.scrollView}
-                showsVerticalScrollIndicator={false}
-                refreshControl={
-                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-                }
-                stickyHeaderIndices={[0]}
-            >
-                <View style={styles.stickyHeader}>
-                    {renderSearchHeader()}
-                    {renderFiltersPanel()}
+        <TabBarWrapper activeTab="courses" showTabs={false}>
+            <SafeAreaView style={styles.container}>
+                {/* Header */}
+                <View style={styles.header}>
+                    <TouchableOpacity
+                        style={styles.backButton}
+                        onPress={() => navigation.goBack()}
+                    >
+                        <Text style={styles.backButtonText}>← Back</Text>
+                    </TouchableOpacity>
+                    <Text style={styles.headerTitle}>Browse Courses</Text>
                 </View>
 
-                <View style={styles.contentContainer}>
-                    {/* Results Summary */}
-                    <View style={styles.resultsSummary}>
-                        <Text style={styles.resultsText}>
-                            {courses.length} course{courses.length !== 1 ? 's' : ''} found
-                        </Text>
-                        {getActiveFilterCount() > 0 && (
-                            <Text style={styles.filtersActiveText}>
-                                {getActiveFilterCount()} filter{getActiveFilterCount() !== 1 ? 's' : ''} active
-                            </Text>
-                        )}
+                <ScrollView
+                    style={styles.scrollView}
+                    showsVerticalScrollIndicator={false}
+                    refreshControl={
+                        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+                    }
+                    stickyHeaderIndices={[0]}
+                >
+                    <View style={styles.stickyHeader}>
+                        {renderSearchHeader()}
+                        {renderFiltersPanel()}
                     </View>
 
-                    {/* Courses List */}
-                    {courses.length === 0 ? (
-                        <View style={styles.emptyContainer}>
-                            <Text style={styles.emptyText}>No courses found</Text>
-                            <Text style={styles.emptySubtext}>
-                                {getActiveFilterCount() > 0
-                                    ? 'Try adjusting your search filters'
-                                    : 'New courses will appear here when available'
-                                }
+                    <View style={styles.contentContainer}>
+                        {/* Results Summary */}
+                        <View style={styles.resultsSummary}>
+                            <Text style={styles.resultsText}>
+                                {courses.length} course{courses.length !== 1 ? 's' : ''} found
                             </Text>
                             {getActiveFilterCount() > 0 && (
-                                <TouchableOpacity
-                                    style={styles.clearFiltersEmptyButton}
-                                    onPress={clearFilters}
-                                >
-                                    <Text style={styles.clearFiltersEmptyButtonText}>Clear Filters</Text>
-                                </TouchableOpacity>
+                                <Text style={styles.filtersActiveText}>
+                                    {getActiveFilterCount()} filter{getActiveFilterCount() !== 1 ? 's' : ''} active
+                                </Text>
                             )}
                         </View>
-                    ) : (
-                        courses.map(renderCourseCard)
-                    )}
-                </View>
-            </ScrollView>
-        </SafeAreaView>
+
+                        {/* Courses List */}
+                        {courses.length === 0 ? (
+                            <View style={styles.emptyContainer}>
+                                <Text style={styles.emptyText}>No courses found</Text>
+                                <Text style={styles.emptySubtext}>
+                                    {getActiveFilterCount() > 0
+                                        ? 'Try adjusting your search filters'
+                                        : 'New courses will appear here when available'
+                                    }
+                                </Text>
+                                {getActiveFilterCount() > 0 && (
+                                    <TouchableOpacity
+                                        style={styles.clearFiltersEmptyButton}
+                                        onPress={clearFilters}
+                                    >
+                                        <Text style={styles.clearFiltersEmptyButtonText}>Clear Filters</Text>
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+                        ) : (
+                            courses.map(renderCourseCard)
+                        )}
+                    </View>
+                </ScrollView>
+            </SafeAreaView>
+        </TabBarWrapper>
     );
 };
 

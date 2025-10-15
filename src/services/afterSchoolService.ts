@@ -290,26 +290,43 @@ export interface StudentDashboard {
 
 // Assignment Grading Interfaces - Updated to match backend response structure
 export interface AssignmentGradeResult {
+    status: 'success' | 'ready' | string;
+    message: string;
     assignment: {
         id: number;
         title: string;
-        description: string;
-        points: number;
-        due_date: number;
+        type?: string;
+        description?: string;
+        points?: number;
     };
+    grade_result: {
+        score?: number | null;
+        percentage?: number | null;
+        grade_letter?: string | null;
+        overall_feedback?: string | null;
+        detailed_feedback?: string | null;
+        strengths?: string[] | string | null;
+        improvements?: string[] | string | null;
+        recommendations?: string[] | string | null;
+        normalized?: any;
+        passing_grade: boolean;
+        required_percentage: number;
+    } | null;
     student_assignment: {
         id: number;
         status: 'assigned' | 'submitted' | 'graded' | 'overdue' | 'passed' | 'needs_retry' | 'failed';
-        grade: number;
-        submitted_at?: string;
-        feedback?: string;
+        grade: number | null;
+        submitted_at?: string | null;
+        feedback?: string | null;
+        graded_by?: string | null;
+        submission_id?: number | null;
+        attempts_used?: number;
+        can_retry?: boolean;
+        attempts_remaining?: number;
     };
-    grade_response: {
-        assignment_id: number;
-        ai_score: number;
-        feedback: string;
-        detailed_feedback: any;
-        passed: boolean;
+    processed_at: string;
+    retry_info?: {
+        is_retry_attempt: boolean;
         attempts_used: number;
         attempts_remaining: number;
     };
@@ -319,21 +336,23 @@ export interface AssignmentStatus {
     assignment: {
         id: number;
         title: string;
-        description: string;
-        points: number;
+        description?: string | null;
+        points?: number | null;
         required_percentage: number;
     };
     student_assignment: {
         id: number;
         status: 'assigned' | 'submitted' | 'graded' | 'overdue' | 'passed' | 'needs_retry' | 'failed';
         grade: number;
-        submitted_at?: string;
-        feedback?: string;
+        submitted_at?: string | null;
+        feedback?: string | null;
+        submission_id?: number | null;
     };
     attempts_info: {
         attempts_used: number;
         attempts_remaining: number;
         can_retry: boolean;
+        latest_submission_at?: string | null;
     };
     message: string;
     passing_grade: boolean;
@@ -1758,12 +1777,22 @@ class AfterSchoolService {
     /**
      * Retry assignment
      */
-    async retryAssignment(assignmentId: string, token: string): Promise<AssignmentGradeResult> {
+    async retryAssignment(
+        assignmentId: string,
+        token: string,
+        submissionData?: {
+            submission_content?: string;
+            submission_file_path?: string;
+            content?: string;
+            file_path?: string;
+        }
+    ): Promise<AssignmentGradeResult> {
         try {
             const response = await this.makeAuthenticatedRequest(
-                `/grades/assignments/${assignmentId}/retry`,
+                `/after-school/sessions/assignments/${assignmentId}/retry`,
                 token,
-                'POST'
+                'POST',
+                submissionData
             );
 
             const data = await response.json();

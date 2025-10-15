@@ -59,7 +59,7 @@ export interface UploadFile {
     size?: number;
 }
 
-// Bulk PDF Upload Interfaces (Updated to work with block/lesson directly)
+// Bulk Image Upload Interfaces (sends images directly to Gemini without PDF conversion)
 export interface BulkPDFUploadRequest {
     course_id: number;
     submission_type: 'homework' | 'quiz' | 'practice' | 'assessment';
@@ -82,21 +82,32 @@ export interface BulkPDFUploadResponse {
     success: boolean;
     message: string;
     submission_id: number;
-    pdf_filename: string;
-    pdf_size: number;
+    submission_filename: string;
+    total_size: number;
     content_hash: string;
     total_images: number;
+    image_files: string[];
     ai_processing_results?: AIProcessingResults;
+    grade_available?: boolean;
+    feedback_available?: boolean;
 }
 
-// AI Processing Interfaces
+// AI Processing Interfaces - Now contains raw + normalized data (BrainInk pattern)
 export interface AIProcessingResults {
-    content_extracted: string;
-    ai_score: number;
-    ai_feedback: string;
-    ai_strengths: string;
-    ai_improvements: string;
-    ai_corrections: string;
+    raw: Record<string, any>;  // Raw Gemini response - kept for backward compatibility
+    normalized?: {
+        score: number | null;
+        percentage: number | null;
+        feedback: string | null;
+        ai_strengths: string[] | null;
+        ai_improvements: string[] | null;
+        ai_corrections: string[] | null;
+        grade_letter: string | null;
+        ai_processed: boolean;
+        requires_review: boolean;
+    };
+    grade_available?: boolean;  // Flag to indicate if grade data is present
+    feedback_available?: boolean;  // Flag to indicate if feedback is present
 }
 
 export interface AIGradingResponse {
@@ -163,6 +174,358 @@ export const UPLOAD_CONFIG = {
 };
 
 class UploadsService {
+    private async delay(ms: number): Promise<void> {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    private normaliseStoredArray(value: unknown): string[] | null {
+        if (!value) return null;
+
+        if (Array.isArray(value)) {
+            return value.map(item => {
+                if (typeof item === 'string') return item;
+                try {
+                    return JSON.stringify(item);
+                } catch {
+                    return String(item);
+                }
+            }).filter(Boolean);
+        }
+
+        if (typeof value === 'string') {
+            const trimmed = value.trim();
+            if (!trimmed) return [];
+            try {
+                const parsed = JSON.parse(trimmed);
+                if (Array.isArray(parsed)) {
+                    return parsed.map(item => {
+                        if (typeof item === 'string') return item;
+                        try {
+                            return JSON.stringify(item);
+                        } catch {
+                            return String(item);
+                        }
+                    }).filter(Boolean);
+                }
+            } catch {
+                // Not JSON, return string as single element array
+            }
+            return [trimmed];
+        }
+
+        try {
+            return [JSON.stringify(value)];
+        } catch {
+            return [String(value)];
+        }
+    }
+
+    private async fetchSubmissionDetailsWithRetry(
+        submissionId: number,
+        token: string,
+        attempts: number = 4,
+        delayMs: number = 1200
+    ): Promise<any | null> {
+        for (let attempt = 1; attempt <= attempts; attempt++) {
+            try {
+                const response = await this.makeAuthenticatedRequest(
+                    `/after-school/submissions/${submissionId}`,
+                    token
+                );
+                const data = await response.json();
+                if (data && typeof data === 'object') {
+                    console.log('✅ Submission details fetched:', { submissionId, attempt });
+                    return data;
+                }
+            } catch (error: any) {
+                const message = error?.message?.toLowerCase?.() || '';
+                if (message.includes('not found') || message.includes('404')) {
+                    console.log(`ℹ️ Submission ${submissionId} not ready yet (attempt ${attempt}/${attempts})`);
+                } else {
+                    console.warn('⚠️ Error fetching submission details:', error);
+                }
+            }
+
+            if (attempt < attempts) {
+                await this.delay(delayMs);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Check if a submission has already been graded (BrainInk pattern)
+     * Returns grade status and details if available
+     */
+    private async checkSubmissionGrade(
+        submissionId: number,
+        token: string
+    ): Promise<{
+        already_graded: boolean;
+        submission_id: number;
+        ai_score: number | null;
+        ai_feedback: string | null;
+        ai_strengths: string[] | null;
+        ai_improvements: string[] | null;
+        ai_corrections: string[] | null;
+        processed_at: string | null;
+        requires_review: boolean;
+    } | null> {
+        try {
+            const response = await this.makeAuthenticatedRequest(
+                `/after-school/submissions/${submissionId}/check-grade`,
+                token
+            );
+            const data = await response.json();
+            console.log('✅ Grade check result:', { submissionId, already_graded: data.already_graded });
+            return data;
+        } catch (error) {
+            console.warn('⚠️ Error checking grade:', error);
+            return null;
+        }
+    }
+
+    private async fetchAssignmentStatusWithRetry(
+        assignmentId: number | undefined,
+        token: string,
+        attempts: number = 3,
+        delayMs: number = 1500
+    ): Promise<any | null> {
+        if (!assignmentId) return null;
+
+        for (let attempt = 1; attempt <= attempts; attempt++) {
+            try {
+                const response = await this.makeAuthenticatedRequest(
+                    `/after-school/assignments/${assignmentId}/status`,
+                    token
+                );
+                const data = await response.json();
+                if (data) {
+                    console.log('✅ Assignment status fetched:', { assignmentId, attempt });
+                    return data;
+                }
+            } catch (error: any) {
+                const message = error?.message?.toLowerCase?.() || '';
+                if (message.includes('not found') || message.includes('404')) {
+                    console.log(`ℹ️ Assignment status not ready yet for ${assignmentId} (attempt ${attempt}/${attempts})`);
+                } else {
+                    console.warn('⚠️ Error fetching assignment status:', error?.message || error);
+                }
+            }
+
+            if (attempt < attempts) {
+                await this.delay(delayMs);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Fix malformed JSON from Gemini API that has escaped quotes and trailing commas
+     * Example: {"\"score\"": "0,"} -> {"score": 0}
+     */
+    /**
+     * Parse raw Gemini grading response into usable format
+     * Handles malformed keys like "\"score\"" and values like "85,"
+     */
+    private parseGeminiGrading(raw: any): {
+        score: number | null;
+        percentage: number | null;
+        feedback: string | null;
+        strengths: string[] | null;
+        improvements: string[] | null;
+        corrections: string[] | null;
+        grade_letter: string | null;
+        error?: string;
+    } {
+        // Accept many shapes: object, stringified JSON, or Gemini candidate objects
+        if (!raw) {
+            console.warn('⚠️ parseGeminiGrading: Empty raw data', raw);
+            return {
+                score: null,
+                percentage: null,
+                feedback: null,
+                strengths: null,
+                improvements: null,
+                corrections: null,
+                grade_letter: null,
+                error: 'Empty response from AI'
+            };
+        }
+
+        // If raw is a string (common when the service returns plain text), try to parse it
+        let workingRaw: any = raw;
+        if (typeof raw === 'string') {
+            const trimmed = raw.trim();
+            try {
+                workingRaw = JSON.parse(trimmed);
+            } catch {
+                // Not JSON — store as text container so further extraction can use it
+                workingRaw = { text: trimmed };
+            }
+        }
+
+        // If Gemini-like wrapper objects exist, pull canonical text out
+        // Common shapes: { text: '...', candidates: [{ content: { text: '...' } }] }, or { candidates: [{ text: '...' }] }
+        if (workingRaw?.candidates && Array.isArray(workingRaw.candidates) && workingRaw.candidates.length > 0) {
+            const cand = workingRaw.candidates[0];
+            if (cand?.content?.text) workingRaw.text = cand.content.text;
+            if (cand?.text) workingRaw.text = cand.text;
+        }
+
+        if (workingRaw?.choices && Array.isArray(workingRaw.choices) && workingRaw.choices.length > 0) {
+            const ch = workingRaw.choices[0];
+            if (ch?.message?.content?.text) workingRaw.text = ch.message.content.text;
+            if (ch?.text) workingRaw.text = ch.text;
+        }
+
+        // Keep an 'error' marker but don't bail out immediately; sometimes `error` exists alongside useful fields
+        const declaredError = workingRaw?.error || workingRaw?.errors || null;
+
+        // Helper to get value from potentially malformed key
+        const getValue = (obj: any, ...possibleKeys: string[]): any => {
+            for (const key of possibleKeys) {
+                // Try exact match
+                if (key in obj) return obj[key];
+                // Try with quotes
+                if (`"${key}"` in obj) return obj[`"${key}"`];
+                // Try with escaped quotes
+                if (`\\"${key}\\"` in obj) return obj[`\\"${key}\\"`];
+            }
+            return null;
+        };
+
+        // Helper to clean string value (remove trailing commas, quotes, etc.)
+        const cleanString = (val: any): string | null => {
+            if (!val) return null;
+            if (typeof val !== 'string') return String(val);
+            return val.replace(/^"(.+)"$/, '$1').replace(/,\s*$/, '').trim() || null;
+        };
+
+        // Helper to parse number from potentially malformed value
+        const parseNumber = (val: any): number | null => {
+            if (val === null || val === undefined) return null;
+            if (typeof val === 'number') return val;
+            if (typeof val === 'string') {
+                const cleaned = val.replace(/,\s*$/, '').trim();
+                const num = parseFloat(cleaned);
+                return isNaN(num) ? null : num;
+            }
+            return null;
+        };
+
+        // Extract values from workingRaw first, fall back to raw
+        const score = parseNumber(getValue(workingRaw, 'score', 'Score')) ?? parseNumber(getValue(raw, 'score', 'Score'));
+        const percentage = parseNumber(getValue(workingRaw, 'percentage', 'percent', 'Percentage')) ?? parseNumber(getValue(raw, 'percentage', 'percent', 'Percentage'));
+        let feedback = cleanString(getValue(workingRaw, 'overall_feedback', 'detailed_feedback', 'feedback')) ?? cleanString(getValue(raw, 'overall_feedback', 'detailed_feedback', 'feedback'));
+        const grade_letter = cleanString(getValue(workingRaw, 'grade_letter', 'letter_grade')) ?? cleanString(getValue(raw, 'grade_letter', 'letter_grade'));
+
+        // If no explicit feedback field, but we have a text blob, use that as feedback
+        if (!feedback && typeof workingRaw?.text === 'string') {
+            feedback = cleanString(workingRaw.text);
+        }
+
+        // Log if score is missing
+        if (score === null && percentage === null) {
+            console.warn('⚠️ parseGeminiGrading: No score or percentage found in response', {
+                keys: Object.keys(raw),
+                rawScore: raw.score,
+                rawPercentage: raw.percentage
+            });
+        }
+
+        // Parse arrays (backend now returns clean arrays after normalization)
+        const parseArray = (val: any): string[] | null => {
+            if (!val) return null;
+
+            // Backend normalization should give us clean arrays now
+            if (Array.isArray(val)) {
+                return val.map(String).filter(Boolean);
+            }
+
+            // Handle incomplete/malformed array markers
+            if (typeof val === 'string') {
+                const trimmed = val.trim();
+                // Empty or incomplete array markers
+                if (trimmed === '[' || trimmed === '{' || trimmed === '[]' || trimmed === '{}') {
+                    return [];
+                }
+                // Try parsing stringified JSON arrays
+                try {
+                    const parsed = JSON.parse(trimmed);
+                    if (Array.isArray(parsed)) {
+                        return parsed.map(String).filter(Boolean);
+                    }
+                } catch {
+                    // Not valid JSON, return empty array for safety
+                    return [];
+                }
+            }
+
+            return [];
+        };
+
+        const strengths = parseArray(getValue(workingRaw, 'strengths')) ?? parseArray(getValue(raw, 'strengths'));
+        const improvements = parseArray(getValue(workingRaw, 'improvements', 'recommendations')) ?? parseArray(getValue(raw, 'improvements', 'recommendations'));
+        const corrections = parseArray(getValue(workingRaw, 'corrections')) ?? parseArray(getValue(raw, 'corrections'));
+
+        // If the raw payload declared an error, include it in the returned payload's error field but keep other data
+        const finalError = declaredError ? (typeof declaredError === 'string' ? declaredError : JSON.stringify(declaredError)) : undefined;
+
+        return {
+            score,
+            percentage,
+            feedback,
+            strengths,
+            improvements,
+            corrections,
+            grade_letter,
+            ...(finalError ? { error: finalError } : {})
+        };
+    }
+
+    private fixMalformedGeminiJSON(raw: any): any {
+        if (!raw || typeof raw !== 'object') {
+            return raw;
+        }
+
+        const fixed: any = {};
+
+        for (const [key, value] of Object.entries(raw)) {
+            // Remove escaped quotes from keys: "\"score\"" -> "score"
+            let cleanKey = key.replace(/^"(.+)"$/, '$1').replace(/\\"/g, '"');
+
+            // Clean values
+            let cleanValue: any = value;
+
+            if (typeof value === 'string') {
+                // Remove escaped quotes and trailing commas from string values
+                // "\"F\"," -> "F"
+                // "0," -> 0
+                cleanValue = value.replace(/^"(.+)"$/, '$1').replace(/\\"/g, '"').replace(/,\s*$/, '').trim();
+
+                // Try to parse as number if it looks like a number
+                if (/^-?\d+(\.\d+)?$/.test(cleanValue)) {
+                    cleanValue = parseFloat(cleanValue);
+                }
+
+                // Handle incomplete JSON objects/arrays (just the opening bracket)
+                if (cleanValue === '[' || cleanValue === '{') {
+                    cleanValue = cleanValue === '[' ? [] : {};
+                }
+            } else if (typeof value === 'object' && value !== null) {
+                // Recursively fix nested objects
+                cleanValue = this.fixMalformedGeminiJSON(value);
+            }
+
+            fixed[cleanKey] = cleanValue;
+        }
+
+        return fixed;
+    }
+
     private async makeAuthenticatedRequest(
         endpoint: string,
         token: string,
@@ -230,16 +593,35 @@ class UploadsService {
             body: formData
         };
 
-        const response = await fetch(`${getBackendUrl()}${endpoint}`, config);
+        console.log('🌐 Making multipart request to:', `${getBackendUrl()}${endpoint}`);
+        console.log('📦 FormData prepared, sending request...');
 
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            const errorMessage = errorData.detail || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
-            console.error('API Error:', errorData);
-            throw new Error(errorMessage);
+        try {
+            const response = await fetch(`${getBackendUrl()}${endpoint}`, config);
+
+            console.log('📡 Response received:', {
+                status: response.status,
+                statusText: response.statusText,
+                ok: response.ok
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                const errorMessage = errorData.detail || errorData.message || `HTTP ${response.status}: ${response.statusText}`;
+                console.error('❌ API Error Response:', errorData);
+                throw new Error(errorMessage);
+            }
+
+            return response;
+        } catch (error) {
+            console.error('❌ Network/Request Error:', error);
+            // If it's already our formatted error, rethrow
+            if (error instanceof Error && error.message.includes('HTTP')) {
+                throw error;
+            }
+            // Otherwise, wrap it
+            throw new Error(`Network request failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
         }
-
-        return response;
     }
 
     // ===============================
@@ -331,11 +713,12 @@ class UploadsService {
     // ===============================
 
     /**
-     * Upload multiple image files and combine them into a single PDF
+     * Upload multiple image files and send them directly to AI for grading
+     * No PDF conversion - images are sent directly to Gemini for more reliable processing
      */
     async bulkUploadImagesToPDF(uploadRequest: BulkPDFUploadRequest, token: string): Promise<BulkPDFUploadResponse> {
         try {
-            console.log('📤 Starting bulk PDF upload for course:', uploadRequest.course_id);
+            console.log('📤 Starting bulk image upload for course:', uploadRequest.course_id);
 
             // Validate the upload request
             const validation = this.validateBulkUploadRequest(uploadRequest);
@@ -362,13 +745,58 @@ class UploadsService {
             if (uploadRequest.assignment_id) formData.append('assignment_id', uploadRequest.assignment_id.toString());
 
             // Add files to FormData (React Native compatible)
-            uploadRequest.files.forEach((file, index) => {
-                // In React Native, files come as objects with uri, type, name
-                formData.append('files', {
+            // CRITICAL: React Native file upload MUST have proper structure for backend
+            console.log('📎 Adding files to FormData:', uploadRequest.files.length);
+
+            for (let i = 0; i < uploadRequest.files.length; i++) {
+                const file = uploadRequest.files[i];
+                console.log(`  File ${i + 1}:`, file.name, file.type, file.uri);
+
+                // IMPORTANT: React Native FormData requires this EXACT structure
+                // If the file upload fails, the URI might not be accessible or the file might be empty
+                // The backend expects actual file binary data, not just a URI reference
+
+                // Ensure file has all required fields
+                if (!file.uri) {
+                    console.error(`❌ File ${i + 1} has no URI!`);
+                    throw new Error(`File ${i + 1} (${file.name}) has no URI`);
+                }
+
+                if (!file.name) {
+                    console.warn(`⚠️ File ${i + 1} has no name, using default`);
+                    file.name = `image_${i}.jpg`;
+                }
+
+                if (!file.type) {
+                    console.warn(`⚠️ File ${i + 1} has no type, using image/jpeg`);
+                    file.type = 'image/jpeg';
+                }
+
+                // React Native FormData will automatically read the file from URI
+                // and send it as multipart/form-data IF the structure is correct
+                const fileToUpload = {
                     uri: file.uri,
                     type: file.type,
                     name: file.name
-                } as any);
+                };
+
+                console.log(`    ✓ Adding file with structure:`, JSON.stringify(fileToUpload, null, 2));
+                formData.append('files', fileToUpload as any);
+            } console.log('📤 Sending FormData to backend...');
+            console.log('📝 Request summary:', {
+                endpoint: '/after-school/uploads/bulk-upload-to-pdf',
+                course_id: uploadRequest.course_id,
+                submission_type: uploadRequest.submission_type,
+                lesson_id: uploadRequest.lesson_id,
+                block_id: uploadRequest.block_id,
+                assignment_id: uploadRequest.assignment_id,
+                fileCount: uploadRequest.files.length,
+                files: uploadRequest.files.map((f, i) => ({
+                    index: i + 1,
+                    name: f.name,
+                    type: f.type,
+                    uriLength: f.uri?.length || 0
+                }))
             });
 
             const response = await this.makeMultipartRequest(
@@ -377,11 +805,18 @@ class UploadsService {
                 formData
             );
 
+            console.log('✅ Backend response received:', {
+                status: response.status,
+                ok: response.ok
+            });
+
             const data = await response.json();
-            console.log('✅ Bulk PDF upload completed successfully');
+
+            // Response now contains ONLY raw Gemini data - no more normalized fields
+            console.log('✅ Bulk image upload completed successfully');
             return data;
         } catch (error) {
-            console.error('❌ Error in bulk PDF upload:', error);
+            console.error('❌ Error in bulk image upload:', error);
             throw error;
         }
     }
@@ -409,12 +844,12 @@ class UploadsService {
             return filesValidation;
         }
 
-        // Check that all files are images for PDF generation
+        // Check that all files are images for direct submission
         const nonImageFiles = request.files.filter(file => !this.isImageFile(file));
         if (nonImageFiles.length > 0) {
             return {
                 valid: false,
-                error: `All files must be images for PDF generation. Non-image files: ${nonImageFiles.map(f => f.name).join(', ')}`
+                error: `All files must be images. Non-image files: ${nonImageFiles.map(f => f.name).join(', ')}`
             };
         }
 
@@ -665,29 +1100,200 @@ class UploadsService {
             const pdfSubmission = await this.bulkUploadImagesToPDF(bulkUploadRequest, token);
             console.log('✅ Step 2 completed: PDF created with submission ID:', pdfSubmission.submission_id);
 
-            // Step 3: The backend automatically processes with AI, so we have the results
+            // Step 3: The backend automatically processes with AI, results are now normalized
             console.log('🤖 Step 3: AI processing completed automatically');
-            const aiProcessing = pdfSubmission.ai_processing_results;
+            let aiProcessing = pdfSubmission.ai_processing_results;
 
             if (!aiProcessing) {
                 console.warn('⚠️ No AI processing results returned from backend');
             }
 
-            // Step 4: Workflow complete - ready for grading integration
+            // Use normalized data first (BrainInk pattern), fall back to raw parsing if needed
+            let parsed: {
+                score: number | null;
+                percentage: number | null;
+                feedback: string | null;
+                strengths: string[] | null;
+                improvements: string[] | null;
+                corrections: string[] | null;
+                grade_letter: string | null;
+                error?: string;
+            };
+
+            if (aiProcessing?.normalized && aiProcessing.grade_available) {
+                // Use normalized data directly (BrainInk pattern)
+                console.log('✅ Using normalized AI results from backend');
+                const norm = aiProcessing.normalized;
+                parsed = {
+                    score: norm.score ?? null,
+                    percentage: norm.percentage ?? null,
+                    feedback: norm.feedback ?? null,
+                    strengths: norm.ai_strengths ?? null,
+                    improvements: norm.ai_improvements ?? null,
+                    corrections: norm.ai_corrections ?? null,
+                    grade_letter: norm.grade_letter ?? null
+                };
+            } else if (aiProcessing?.raw) {
+                // Fall back to parsing raw Gemini data
+                console.log('ℹ️ Parsing raw Gemini data (normalized not available)');
+                parsed = this.parseGeminiGrading(aiProcessing.raw);
+            } else {
+                // No data available
+                parsed = {
+                    score: null,
+                    percentage: null,
+                    feedback: null,
+                    strengths: null,
+                    improvements: null,
+                    corrections: null,
+                    grade_letter: null,
+                    error: 'No AI processing results'
+                };
+            }
+
+            // Handle specific Gemini edge cases by triggering a reprocess fallback
+            if (parsed.error && pdfSubmission.submission_id) {
+                const normalizedError = parsed.error.toLowerCase();
+                const shouldRetry = normalizedError.includes('no text returned by gemini response') ||
+                    normalizedError.includes('no text returned by the gemini response');
+
+                if (shouldRetry) {
+                    console.warn('⚠️ Gemini returned empty text. Attempting automatic fallback sync with backend...');
+
+                    const submissionId = Number(pdfSubmission.submission_id);
+                    const assignmentIdForStatus = Number.isFinite(assignmentId) ? assignmentId : undefined;
+
+                    let fallbackRaw: Record<string, any> | null = null;
+                    let reprocessData: any = null;
+
+                    // Step 1: Wait for submission record to be queryable (handles DB timing delays)
+                    const refreshedSubmission = submissionId ?
+                        await this.fetchSubmissionDetailsWithRetry(submissionId, token) :
+                        null;
+
+                    if (refreshedSubmission) {
+                        fallbackRaw = {
+                            score: refreshedSubmission?.ai_score ?? null,
+                            percentage: refreshedSubmission?.ai_score ?? null,
+                            overall_feedback: refreshedSubmission?.ai_feedback || null,
+                            detailed_feedback: refreshedSubmission?.ai_feedback || null,
+                            strengths: this.normaliseStoredArray(refreshedSubmission?.ai_strengths),
+                            improvements: this.normaliseStoredArray(refreshedSubmission?.ai_improvements),
+                            corrections: this.normaliseStoredArray(refreshedSubmission?.ai_corrections)
+                        };
+                    }
+
+                    // Step 2: Attempt a backend reprocess after a short delay (avoids hitting stale state)
+                    if (submissionId) {
+                        await this.delay(1200);
+                        try {
+                            const reprocessResponse = await this.makeAuthenticatedRequest(
+                                `/after-school/uploads/submissions/${submissionId}/reprocess`,
+                                token,
+                                'POST'
+                            );
+                            reprocessData = await reprocessResponse.json();
+
+                            if (!fallbackRaw) {
+                                fallbackRaw = {};
+                            }
+
+                            if (reprocessData) {
+                                fallbackRaw.score = reprocessData.ai_score ?? fallbackRaw.score ?? null;
+                                fallbackRaw.percentage = reprocessData.ai_score ?? fallbackRaw.percentage ?? null;
+                                fallbackRaw.overall_feedback = reprocessData.ai_feedback || fallbackRaw.overall_feedback || null;
+                                fallbackRaw.detailed_feedback = fallbackRaw.overall_feedback || fallbackRaw.detailed_feedback || null;
+                            }
+                        } catch (fallbackError) {
+                            console.error('❌ Reprocess attempt failed (will try other fallbacks):', fallbackError);
+                        }
+                    }
+
+                    // Step 3: Poll assignment status for the latest grading outcome if still empty
+                    if ((!fallbackRaw || (!fallbackRaw.overall_feedback && fallbackRaw.score == null)) && assignmentIdForStatus) {
+                        const assignmentStatus = await this.fetchAssignmentStatusWithRetry(assignmentIdForStatus, token);
+                        const gradeResult = assignmentStatus?.grade_result;
+                        const studentAssignment = assignmentStatus?.student_assignment;
+
+                        if (gradeResult || studentAssignment) {
+                            fallbackRaw = {
+                                score: gradeResult?.score ?? studentAssignment?.grade ?? fallbackRaw?.score ?? null,
+                                percentage: gradeResult?.percentage ?? studentAssignment?.grade ?? fallbackRaw?.percentage ?? null,
+                                grade_letter: gradeResult?.grade_letter ?? null,
+                                overall_feedback: gradeResult?.overall_feedback || studentAssignment?.feedback || fallbackRaw?.overall_feedback || null,
+                                detailed_feedback: gradeResult?.detailed_feedback || fallbackRaw?.detailed_feedback || null,
+                                strengths: this.normaliseStoredArray(gradeResult?.strengths || gradeResult?.normalized?.ai_strengths || fallbackRaw?.strengths || null),
+                                improvements: this.normaliseStoredArray(gradeResult?.improvements || gradeResult?.recommendations || fallbackRaw?.improvements || null),
+                                corrections: this.normaliseStoredArray(gradeResult?.corrections || fallbackRaw?.corrections || null)
+                            };
+                        }
+                    }
+
+                    if (fallbackRaw) {
+                        const reparsed = this.parseGeminiGrading(fallbackRaw);
+
+                        if (!reparsed.error) {
+                            console.log('✅ Fallback sync succeeded. Using refreshed AI results.');
+                            parsed = reparsed;
+                            aiProcessing = { raw: fallbackRaw };
+                        } else {
+                            console.error('❌ Fallback sync still produced an error:', reparsed.error);
+                        }
+                    }
+                }
+            }
+
+            // If parsing still resulted in an error after fallbacks, do not throw — return partial results
+            if (parsed.error) {
+                console.error('❌ AI processing error (non-fatal):', parsed.error);
+
+                // Ensure aiProcessing exists and attach normalized fields and error info for the UI
+                aiProcessing = aiProcessing || { raw: {} };
+                aiProcessing.normalized = aiProcessing.normalized || {
+                    score: parsed.score ?? null,
+                    percentage: parsed.percentage ?? null,
+                    feedback: parsed.feedback ?? null,
+                    ai_strengths: parsed.strengths ?? null,
+                    ai_improvements: parsed.improvements ?? null,
+                    ai_corrections: parsed.corrections ?? null,
+                    grade_letter: parsed.grade_letter ?? null,
+                    ai_processed: false,
+                    requires_review: true
+                };
+                // Expose the parsing error so UI can show a message/helpful feedback
+                aiProcessing.raw = aiProcessing.raw || {};
+                aiProcessing.raw._parsing_error = parsed.error;
+
+                console.log('✅ Assignment workflow completed with AI parsing issues (partial results returned)');
+
+                return {
+                    pdf_submission: pdfSubmission,
+                    ai_processing: aiProcessing,
+                    ready_for_grading: false
+                };
+            }
+
             console.log('✅ Assignment workflow completed successfully');
-            console.log('📊 AI Score:', aiProcessing?.ai_score, 'Feedback available:', !!aiProcessing?.ai_feedback);
+            console.log('📊 AI Score:', parsed.score, 'Feedback available:', !!parsed.feedback);
+
+            // Attach normalized result to aiProcessing for consistency
+            aiProcessing = aiProcessing || { raw: {} };
+            aiProcessing.normalized = aiProcessing.normalized || {
+                score: parsed.score ?? null,
+                percentage: parsed.percentage ?? null,
+                feedback: parsed.feedback ?? null,
+                ai_strengths: parsed.strengths ?? null,
+                ai_improvements: parsed.improvements ?? null,
+                ai_corrections: parsed.corrections ?? null,
+                grade_letter: parsed.grade_letter ?? null,
+                ai_processed: true,
+                requires_review: false
+            };
 
             return {
                 pdf_submission: pdfSubmission,
-                ai_processing: aiProcessing || {
-                    content_extracted: '',
-                    ai_score: 0,
-                    ai_feedback: 'Processing pending',
-                    ai_strengths: '',
-                    ai_improvements: '',
-                    ai_corrections: ''
-                },
-                ready_for_grading: !!aiProcessing && aiProcessing.ai_score > 0
+                ai_processing: aiProcessing,
+                ready_for_grading: parsed.score != null && parsed.score >= 0
             };
 
         } catch (error) {
@@ -1081,8 +1687,11 @@ class UploadsService {
         status: 'pending' | 'processing' | 'completed' | 'error';
     } {
         const imagesCount = images?.length || 0;
-        const pdfGenerated = !!pdfSubmission?.pdf_filename;
-        const aiProcessed = !!aiResults?.ai_score;
+        const pdfGenerated = !!pdfSubmission?.submission_filename;
+
+        // Parse raw AI results if available
+        const parsed = aiResults?.raw ? this.parseGeminiGrading(aiResults.raw) : null;
+        const aiProcessed = !!(parsed && parsed.score != null);
 
         let status: 'pending' | 'processing' | 'completed' | 'error' = 'pending';
 
@@ -1098,8 +1707,8 @@ class UploadsService {
             imagesCount,
             pdfGenerated,
             aiProcessed,
-            score: aiResults?.ai_score,
-            feedback: aiResults?.ai_feedback,
+            score: parsed?.score ?? undefined,
+            feedback: parsed?.feedback ?? undefined,
             status
         };
     }

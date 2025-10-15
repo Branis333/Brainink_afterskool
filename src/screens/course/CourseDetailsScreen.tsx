@@ -287,11 +287,48 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
     };
 
     // Navigate to assignment workflow
+    const resolveAssignmentDefinition = useCallback(
+        (assignment: StudentAssignment): CourseAssignment | undefined => {
+            if (assignment?.assignment) {
+                return assignment.assignment as CourseAssignment;
+            }
+            return rawAssignments.find(def => def.id === assignment.assignment_id);
+        },
+        [rawAssignments]
+    );
+
+    const getAssignmentTitle = useCallback(
+        (assignment: StudentAssignment): string => {
+            const meta = resolveAssignmentDefinition(assignment);
+            if (meta?.title) {
+                return meta.title;
+            }
+            return `Assignment #${assignment.assignment_id}`;
+        },
+        [resolveAssignmentDefinition]
+    );
+
+    const getAssignmentDescription = useCallback(
+        (assignment: StudentAssignment): string | undefined => {
+            const meta = resolveAssignmentDefinition(assignment);
+            return meta?.description || undefined;
+        },
+        [resolveAssignmentDefinition]
+    );
+
+    const getAssignmentDuration = useCallback(
+        (assignment: StudentAssignment): number | undefined => {
+            const meta = resolveAssignmentDefinition(assignment);
+            return meta?.duration_minutes ?? undefined;
+        },
+        [resolveAssignmentDefinition]
+    );
+
     const navigateToAssignment = (assignment: StudentAssignment) => {
         navigation.navigate('CourseAssignment', {
             courseId,
             assignmentId: assignment.assignment_id,
-            assignmentTitle: assignment.assignment.title,
+            assignmentTitle: getAssignmentTitle(assignment),
             courseTitle
         });
     };
@@ -301,7 +338,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         navigation.navigate('CourseAssignment', {
             courseId,
             assignmentId: assignment.assignment_id,
-            assignmentTitle: assignment.assignment.title,
+            assignmentTitle: getAssignmentTitle(assignment),
             courseTitle,
             startWorkflow: true
         });
@@ -798,15 +835,17 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
             <View style={styles.assignmentWorkflowCard}>
                 <View style={styles.assignmentHeader}>
                     <View style={styles.assignmentInfo}>
-                        <Text style={styles.assignmentWorkflowTitle}>{assignment.assignment.title}</Text>
-                        <Text style={styles.assignmentDescription}>{assignment.assignment.description}</Text>
+                        <Text style={styles.assignmentWorkflowTitle}>{getAssignmentTitle(assignment)}</Text>
+                        <Text style={styles.assignmentDescription}>
+                            {getAssignmentDescription(assignment) || 'No description available yet.'}
+                        </Text>
                         <View style={styles.assignmentMeta}>
                             <Text style={styles.assignmentMetaText}>
                                 Due: {new Date(assignment.due_date).toLocaleDateString()}
                             </Text>
-                            {assignment.assignment.duration_minutes && (
+                            {getAssignmentDuration(assignment) && (
                                 <Text style={styles.assignmentMetaText}>
-                                    • {assignment.assignment.duration_minutes} min
+                                    • {getAssignmentDuration(assignment)} min
                                 </Text>
                             )}
                         </View>

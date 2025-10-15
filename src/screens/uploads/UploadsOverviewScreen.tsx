@@ -197,10 +197,30 @@ export const UploadsOverviewScreen: React.FC<Props> = ({ navigation }) => {
         return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + ' ' + sizes[i];
     };
 
+    const parseBackendTimestamp = (value?: string | null): Date | null => {
+        if (!value || typeof value !== 'string') {
+            return null;
+        }
+
+        // Backend returns naive UTC timestamps (no timezone). Append 'Z' to treat as UTC.
+        const hasTimezone = /[zZ]|[\+\-]\d{2}:?\d{2}$/.test(value);
+        const normalised = hasTimezone ? value : `${value}Z`;
+
+        const parsed = new Date(normalised);
+        return isNaN(parsed.getTime()) ? null : parsed;
+    };
+
     const formatTimeAgo = (dateString: string): string => {
-        const date = new Date(dateString);
+        const date = parseBackendTimestamp(dateString);
+        if (!date) {
+            return 'Just now';
+        }
         const now = new Date();
         const diffInMinutes = Math.floor((now.getTime() - date.getTime()) / (1000 * 60));
+
+        if (diffInMinutes <= 0) {
+            return 'Just now';
+        }
 
         if (diffInMinutes < 60) {
             return `${diffInMinutes} min ago`;
