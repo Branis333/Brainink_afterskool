@@ -21,6 +21,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { CourseHomepageScreen } from '../screens/CourseHomepageScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { CourseSearchScreen } from '../screens/course/CourseSearchScreen';
+import { MyCoursesScreen } from '../screens/course/MyCourses';
 import { UploadsOverviewScreen } from '../screens/uploads/UploadsOverviewScreen';
 import { GradesOverviewScreen } from '../screens/grades/GradesOverviewScreen';
 
@@ -114,7 +115,7 @@ export const MainTabContainer: React.FC<Props> = ({
             case 'home':
                 return <CourseHomepageScreen navigation={navigation} />;
             case 'courses':
-                return <CourseSearchScreen navigation={navigation} />;
+                return <MyCoursesScreen navigation={navigation} />;
             case 'uploads':
                 return <UploadsOverviewScreen navigation={navigation as any} route={mockRoute} />;
             case 'grades':

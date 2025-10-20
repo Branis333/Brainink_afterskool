@@ -35,7 +35,7 @@ export const TabBarWrapper: React.FC<TabBarWrapperProps> = ({
             label: 'Courses',
             icon: 'library-outline',
             activeIcon: 'library',
-            onPress: () => navigation.navigate('CourseSearch'),
+            onPress: () => navigation.navigate('MyCourses'),
         },
         {
             id: 'uploads',
@@ -62,7 +62,7 @@ export const TabBarWrapper: React.FC<TabBarWrapperProps> = ({
 
     return (
         <View style={styles.container}>
-            <View style={styles.content}>
+            <View style={[styles.content, showTabs && styles.contentWithTabs]}>
                 {children}
             </View>
             {showTabs && (
@@ -82,9 +82,12 @@ export const TabBarWrapper: React.FC<TabBarWrapperProps> = ({
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#FFFFFF',
+        backgroundColor: '#ffffff',
     },
     content: {
         flex: 1,
+    },
+    contentWithTabs: {
+        paddingBottom: 90, // Add space for the bottom tab bar
     },
 });

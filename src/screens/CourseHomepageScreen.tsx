@@ -15,6 +15,8 @@ import {
     Alert,
     ActivityIndicator,
     FlatList,
+    StatusBar,
+    Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
@@ -34,7 +36,7 @@ interface Props {
 type CourseCategory = 'all' | 'in-progress' | 'completed' | 'beginner' | 'intermediate' | 'advanced';
 
 const { width } = Dimensions.get('window');
-const CARD_WIDTH = width * 0.42; // Reduced from 0.7 to make cards smaller
+const CARD_WIDTH = width * 0.42; // Wider cards to match screenshot
 const CARD_MARGIN = 10;
 
 export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
@@ -44,6 +46,7 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
     const [refreshing, setRefreshing] = useState(false);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [selectedCategory, setSelectedCategory] = useState<CourseCategory>('all');
+    const [statusBarStyle, setStatusBarStyle] = useState<'light-content' | 'dark-content'>('dark-content');
 
     // Load dashboard data
     const loadDashboard = async (isRefresh: boolean = false) => {
@@ -216,20 +219,20 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
             {/* Top Navigation Bar */}
             <View style={styles.topNav}>
                 <TouchableOpacity style={styles.menuButton}>
-                    <Ionicons name="menu" size={24} color="#1a1a1a" />
+                    <Ionicons name="menu" size={24} color="#FFFFFF" />
                 </TouchableOpacity>
                 <View style={styles.headerIcons}>
                     <TouchableOpacity
                         style={styles.iconButton}
                         onPress={() => navigation.navigate('UploadsOverview')}
                     >
-                        <Ionicons name="cloud-upload-outline" size={22} color="#1a1a1a" />
+                        <Ionicons name="cloud-upload-outline" size={22} color="#FFFFFF" />
                     </TouchableOpacity>
                     <TouchableOpacity
                         style={styles.iconButton}
                         onPress={() => navigation.navigate('GradesOverview')}
                     >
-                        <Ionicons name="notifications-outline" size={22} color="#1a1a1a" />
+                        <Ionicons name="notifications-outline" size={22} color="#FFFFFF" />
                     </TouchableOpacity>
                 </View>
             </View>
@@ -265,10 +268,18 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
                 onPress={() => navigateToCourse(course)}
                 activeOpacity={0.8}
             >
-                {/* Card Image Placeholder */}
-                <View style={[styles.cardImagePlaceholder, { backgroundColor: getCardColor(index) }]}>
-                    <Ionicons name="book-outline" size={28} color="white" />
-                </View>
+                {/* Card Image - Display actual image if available, otherwise placeholder */}
+                {course.image ? (
+                    <Image
+                        source={{ uri: `data:image/jpeg;base64,${course.image}` }}
+                        style={styles.cardImagePlaceholder}
+                        resizeMode="cover"
+                    />
+                ) : (
+                    <View style={[styles.cardImagePlaceholder, { backgroundColor: getCardColor(index) }]}>
+                        <Ionicons name="book-outline" size={28} color="white" />
+                    </View>
+                )}
 
                 {/* Course Info */}
                 <View style={styles.horizontalCardContent}>
@@ -539,12 +550,32 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
         );
     };
 
+    // Handle scroll event to change status bar
+    const handleScroll = (event: any) => {
+        const offsetY = event.nativeEvent.contentOffset.y;
+        // Change status bar style based on scroll position
+        // If scrolled past the purple header (approx 300px), use dark status bar
+        if (offsetY > 250) {
+            setStatusBarStyle('dark-content');
+        } else {
+            setStatusBarStyle('light-content');
+        }
+    };
+
     return (
-        <TabBarWrapper activeTab="home" showTabs={false}>
-            <SafeAreaView style={styles.fullscreenContainer} edges={['top']}>
+        <TabBarWrapper activeTab="home" showTabs={true}>
+            <View style={styles.container}>
+                <StatusBar
+                    barStyle="dark-content"
+                    backgroundColor="transparent"
+                    translucent={true}
+                    animated={true}
+                />
                 <ScrollView
                     style={styles.scrollView}
                     showsVerticalScrollIndicator={false}
+                    onScroll={handleScroll}
+                    scrollEventThrottle={16}
                     refreshControl={
                         <RefreshControl
                             refreshing={refreshing}
@@ -553,12 +584,25 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
                             colors={['#26D9CA']}
                         />
                     }
-                    contentInsetAdjustmentBehavior="never"
+                    contentInsetAdjustmentBehavior="automatic"
                 >
                     {renderHeader()}
                     {renderMainContent()}
                 </ScrollView>
-            </SafeAreaView>
+
+                {/* Subtle blur overlay for status bar area with gradient fade */}
+                <View style={styles.statusBarBlurContainer} pointerEvents="none">
+                    <BlurView
+                        intensity={3}
+                        tint="light"
+                        style={styles.statusBarBlur}
+                    />
+                    {/* Multiple layers to create fade effect */}
+                    <View style={[styles.blurFadeLayer, { bottom: 0, height: 15, opacity: 0.6 }]} />
+                    <View style={[styles.blurFadeLayer, { bottom: 0, height: 10, opacity: 0.4 }]} />
+                    <View style={[styles.blurFadeLayer, { bottom: 0, height: 5, opacity: 0.3 }]} />
+                </View>
+            </View>
         </TabBarWrapper>
     );
 };
@@ -566,15 +610,37 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#FFFFFF',
+        backgroundColor: '#ffffff',
     },
     fullscreenContainer: {
         flex: 1,
-        backgroundColor: '#FFFFFF',
+        backgroundColor: '#ffffff',
     },
     scrollView: {
         flex: 1,
-        backgroundColor: '#FFFFFF',
+        backgroundColor: '#ffffff',
+    },
+    statusBarBlurContainer: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 60,
+        zIndex: 999,
+        overflow: 'hidden',
+    },
+    statusBarBlur: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        height: 60,
+    },
+    blurFadeLayer: {
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        backgroundColor: '#ffffff02',
     },
     loadingContainer: {
         flex: 1,
@@ -593,11 +659,14 @@ const styles = StyleSheet.create({
     // Header Styles
     headerContainer: {
         backgroundColor: '#7B68EE',
+        borderTopLeftRadius: 30,
+        borderTopRightRadius: 30,
         borderBottomLeftRadius: 30,
         borderBottomRightRadius: 30,
-        paddingTop: 10,
+        paddingTop: 20,
         paddingBottom: 30,
         paddingHorizontal: 20,
+        marginTop: 10,
     },
     topNav: {
         flexDirection: 'row',
@@ -608,7 +677,7 @@ const styles = StyleSheet.create({
     menuButton: {
         width: 40,
         height: 40,
-        backgroundColor: 'rgba(255, 255, 255, 0.2)',
+        backgroundColor: 'rgba(255, 255, 255, 0.25)',
         borderRadius: 12,
         justifyContent: 'center',
         alignItems: 'center',
@@ -620,7 +689,7 @@ const styles = StyleSheet.create({
     iconButton: {
         width: 40,
         height: 40,
-        backgroundColor: 'rgba(255, 255, 255, 0.9)',
+        backgroundColor: 'rgba(255, 255, 255, 0.25)',
         borderRadius: 12,
         justifyContent: 'center',
         alignItems: 'center',
@@ -737,29 +806,35 @@ const styles = StyleSheet.create({
         width: CARD_WIDTH,
         backgroundColor: '#FFFFFF',
         borderRadius: 16,
-        overflow: 'hidden',
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.1,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.08,
         shadowRadius: 8,
-        elevation: 4,
+        elevation: 3,
+        borderWidth: 1,
+        borderColor: 'rgba(0, 0, 0, 0.06)',
     },
     cardImagePlaceholder: {
         width: '100%',
-        height: 80, // Reduced from 140
+        height: 85,
         justifyContent: 'center',
         alignItems: 'center',
+        borderTopLeftRadius: 16,
+        borderTopRightRadius: 16,
+        borderBottomLeftRadius: 12,
+        borderBottomRightRadius: 12,
+        overflow: 'hidden',
     },
     horizontalCardContent: {
-        padding: 10, // Reduced from 16
+        padding: 8,
     },
     cardBadge: {
         backgroundColor: '#FFE9E0',
-        paddingHorizontal: 10,
-        paddingVertical: 4,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
         borderRadius: 12,
         alignSelf: 'flex-start',
-        marginBottom: 8,
+        marginBottom: 6,
     },
     cardBadgeText: {
         fontSize: 11,
@@ -767,23 +842,23 @@ const styles = StyleSheet.create({
         color: '#FF6B35',
     },
     horizontalCourseTitle: {
-        fontSize: 13, // Reduced from 16
+        fontSize: 13,
         fontWeight: 'bold',
         color: '#1a1a1a',
-        marginBottom: 4,
-        lineHeight: 17,
+        marginBottom: 3,
+        lineHeight: 15,
     },
     horizontalCourseSubject: {
-        fontSize: 11, // Reduced from 13
+        fontSize: 13,
         color: '#26D9CA',
-        marginBottom: 8,
+        marginBottom: 6,
         fontWeight: '500',
     },
     horizontalMetaRow: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
-        marginBottom: 8,
+        marginBottom: 6,
     },
     metaItem: {
         flexDirection: 'row',
@@ -802,7 +877,7 @@ const styles = StyleSheet.create({
     miniProgressContainer: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginTop: 12,
+        marginTop: 8,
         gap: 8,
     },
     miniProgressBar: {

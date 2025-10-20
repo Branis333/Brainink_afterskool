@@ -46,6 +46,9 @@ export const BottomTabs: React.FC<BottomTabsProps> = ({
     inactiveColor = '#D1D5DB',
     showLabels = true,
 }) => {
+    // Find active tab index for dynamic spacing
+    const activeIndex = tabs.findIndex(tab => tab.id === activeTab);
+
     const renderTabItem = (tab: TabItem, index: number) => {
         const isActive = activeTab === tab.id;
         const iconName = isActive && tab.activeIcon ? tab.activeIcon : tab.icon;
@@ -57,10 +60,26 @@ export const BottomTabs: React.FC<BottomTabsProps> = ({
         const maxActiveWidth = Math.min(width * 0.44, 200);
         const estimatedLabelWidth = Math.min(Math.max(tab.label.length * 12 + 32, 80), maxActiveWidth);
 
+        // Calculate dynamic margin based on position relative to active tab
+        let marginLeft = 0;
+        let marginRight = 0;
+
+        if (index < activeIndex) {
+            // Icons to the left of active: shift left by 10%
+            marginRight = width * 0.02;
+        } else if (index > activeIndex) {
+            // Icons to the right of active: shift right by 10%
+            marginLeft = width * 0.02;
+        }
+
         return (
             <TouchableOpacity
                 key={tab.id}
-                style={[styles.tabItem, isActive ? styles.tabItemActive : styles.tabItemInactive]}
+                style={[
+                    styles.tabItem,
+                    isActive ? styles.tabItemActive : styles.tabItemInactive,
+                    { marginLeft, marginRight }
+                ]}
                 onPress={tab.onPress}
                 activeOpacity={0.8}
             >
@@ -135,13 +154,12 @@ const styles = StyleSheet.create({
     tabBar: {
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        paddingHorizontal: 12,
+        justifyContent: 'space-evenly',
+        paddingHorizontal: 16,
         paddingVertical: 8,
         height: 64, // reduced from 64 to remove extra white space under icons
     },
     tabItem: {
-        flex: 1,
         alignItems: 'center',
         justifyContent: 'center',
         minWidth: 56,
@@ -150,10 +168,12 @@ const styles = StyleSheet.create({
         // allow active tab to take more horizontal space
         alignItems: 'center',
         justifyContent: 'center',
-        paddingHorizontal: 6,
+        paddingHorizontal: 4,
+        flex: 2.5,
     },
     tabItemInactive: {
-        paddingHorizontal: 6,
+        paddingHorizontal: 4,
+        flex: 1,
     },
     activeTabWrapper: {
         flexDirection: 'row',

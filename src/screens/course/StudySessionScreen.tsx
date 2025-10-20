@@ -21,6 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useFocusEffect } from '@react-navigation/native';
 import { WebView } from 'react-native-webview';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import {
     afterSchoolService,
@@ -706,26 +707,21 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
     // Render session header
     const renderSessionHeader = () => {
         const primaryTitle = blockTitle || lessonTitle || 'Study Session';
-        const subtitleText = courseTitle || 'Course';
 
         return (
             <View style={styles.sessionHeader}>
-                <View style={styles.headerTop}>
+                <View style={styles.headerActions}>
                     <TouchableOpacity
-                        style={styles.backButton}
+                        style={styles.backIconButton}
                         onPress={handleBackPress}
                     >
-                        <Text style={styles.backButtonText}>← Back</Text>
+                        <Ionicons name="chevron-back" size={24} color="#333" />
                     </TouchableOpacity>
-                    <View style={styles.headerTitleContainer}>
-                        <Text style={styles.headerSubtitle} numberOfLines={1}>{subtitleText}</Text>
-                        <Text style={styles.headerTitle} numberOfLines={1}>{primaryTitle}</Text>
-                    </View>
                     <TouchableOpacity
-                        style={styles.menuButton}
+                        style={styles.menuIconButton}
                         onPress={() => setMenuVisible(true)}
                     >
-                        <Text style={styles.menuIcon}>☰</Text>
+                        <Ionicons name="menu" size={24} color="#333" />
                     </TouchableOpacity>
                 </View>
             </View>
@@ -883,9 +879,9 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                 onRequestClose={() => setMenuVisible(false)}
             >
                 <View style={styles.menuOverlay}>
+                    <Pressable style={styles.menuBackdrop} onPress={() => setMenuVisible(false)} />
                     <View style={styles.sideMenuContainer}>
                         <View style={styles.sideMenuHeader}>
-                            <Text style={styles.sideMenuHeaderLabel}>Study Navigation</Text>
                             <TouchableOpacity onPress={() => setMenuVisible(false)}>
                                 <Text style={styles.sideMenuClose}>✕</Text>
                             </TouchableOpacity>
@@ -934,7 +930,6 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                             )}
                         </View>
                     </View>
-                    <Pressable style={styles.menuBackdrop} onPress={() => setMenuVisible(false)} />
                 </View>
             </Modal>
             {renderSessionHeader()}
@@ -990,42 +985,26 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1,
         borderBottomColor: '#e0e0e0',
     },
-    headerTop: {
+    headerActions: {
         flexDirection: 'row',
-        alignItems: 'center',
         justifyContent: 'space-between',
+        alignItems: 'center',
     },
-    backButton: {
-        padding: 8,
+    backIconButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: '#F8F9FC',
+        justifyContent: 'center',
+        alignItems: 'center',
     },
-    backButtonText: {
-        fontSize: 16,
-        color: '#007AFF',
-        fontWeight: '600',
-    },
-    headerTitleContainer: {
-        flex: 1,
-        marginHorizontal: 12,
-    },
-    headerSubtitle: {
-        fontSize: 12,
-        color: '#6b7280',
-        marginBottom: 2,
-    },
-    headerTitle: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: '#111827',
-    },
-    menuButton: {
-        padding: 8,
-        borderRadius: 8,
-        backgroundColor: '#F1F5F9',
-    },
-    menuIcon: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: '#1D4ED8',
+    menuIconButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: '#F8F9FC',
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     // Footer styles (moved from header) - Minimized to 1/3 size
     sessionFooter: {
@@ -1406,6 +1385,7 @@ const styles = StyleSheet.create({
     menuOverlay: {
         flex: 1,
         flexDirection: 'row',
+        justifyContent: 'flex-end',
         backgroundColor: 'rgba(15, 23, 42, 0.35)',
     },
     menuBackdrop: {
@@ -1413,29 +1393,29 @@ const styles = StyleSheet.create({
     },
     sideMenuContainer: {
         width: Math.min(width * 0.78, 340),
-        backgroundColor: '#fff',
+        height: height * 0.6, // Half height
+        backgroundColor: '#dee6ffff', // Purple theme color
         paddingVertical: 24,
         paddingHorizontal: 20,
         shadowColor: '#000',
-        shadowOffset: { width: -2, height: 0 },
+        shadowOffset: { width: 2, height: 0 },
         shadowOpacity: 0.2,
         shadowRadius: 10,
         elevation: 8,
+        borderTopLeftRadius: 20,
+        borderBottomLeftRadius: 20,
+        paddingTop: 15,
+        marginTop: height * 0.06,// Center vertically
     },
     sideMenuHeader: {
         flexDirection: 'row',
-        justifyContent: 'space-between',
+        justifyContent: 'flex-end', // Align close button to right
         alignItems: 'center',
         marginBottom: 16,
     },
-    sideMenuHeaderLabel: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: '#1f2937',
-    },
     sideMenuClose: {
-        fontSize: 18,
-        color: '#64748B',
+        fontSize: 25,
+        color: '#070707ff', // White text for purple background
         padding: 4,
     },
     sideMenuCourseInfo: {
@@ -1443,17 +1423,17 @@ const styles = StyleSheet.create({
     },
     sideMenuCourseTitle: {
         fontSize: 14,
-        color: '#94A3B8',
+        color: '#000000ff', // Light purple text
         marginBottom: 4,
     },
     sideMenuLessonTitle: {
         fontSize: 18,
         fontWeight: '700',
-        color: '#1f2937',
+        color: '#000000ff', // White text for purple background
     },
     sideMenuSectionTitle: {
         fontSize: 13,
-        color: '#94A3B8',
+        color: '#000000ff', // Light purple text
         textTransform: 'uppercase',
         letterSpacing: 1.2,
         marginBottom: 12,

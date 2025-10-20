@@ -32,6 +32,7 @@ export interface CourseUpdate {
     age_max?: number;
     difficulty_level?: 'beginner' | 'intermediate' | 'advanced';
     is_active?: boolean;
+    image?: string; // Base64 encoded image
 }
 
 export interface Course {
@@ -44,6 +45,9 @@ export interface Course {
     difficulty_level: string;
     created_by: number;
     is_active: boolean;
+
+    // Course image - base64 encoded
+    image?: string | null;
 
     // Enhanced course structure fields
     total_weeks: number;
@@ -766,6 +770,100 @@ class AfterSchoolService {
             return data;
         } catch (error) {
             console.error('❌ Error deleting course:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Create a course with an image
+     */
+    async createCourseWithImage(
+        courseData: CourseCreate,
+        imageFile: { uri: string; name: string; type: string },
+        token: string
+    ): Promise<Course> {
+        try {
+            console.log('📚 Creating course with image:', courseData.title);
+
+            const formData = new FormData();
+            formData.append('title', courseData.title);
+            formData.append('subject', courseData.subject);
+            formData.append('description', courseData.description || '');
+            formData.append('age_min', courseData.age_min.toString());
+            formData.append('age_max', courseData.age_max.toString());
+            formData.append('difficulty_level', courseData.difficulty_level);
+
+            // Append image file
+            if (imageFile) {
+                formData.append('image_file', {
+                    uri: imageFile.uri,
+                    name: imageFile.name,
+                    type: imageFile.type,
+                } as any);
+            }
+
+            const response = await fetch(`${getBackendUrl()}/after-school/courses/with-image`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    // FormData will set the Content-Type header automatically
+                },
+                body: formData,
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'Failed to create course with image');
+            }
+
+            const data = await response.json();
+            console.log('✅ Course created with image:', data);
+            return data;
+        } catch (error) {
+            console.error('❌ Error creating course with image:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Update course image
+     */
+    async updateCourseImage(
+        courseId: number,
+        imageFile: { uri: string; name: string; type: string },
+        token: string
+    ): Promise<Course> {
+        try {
+            console.log('📸 Updating course image for course ID:', courseId);
+
+            const formData = new FormData();
+
+            // Append image file
+            formData.append('image_file', {
+                uri: imageFile.uri,
+                name: imageFile.name,
+                type: imageFile.type,
+            } as any);
+
+            const response = await fetch(`${getBackendUrl()}/after-school/courses/${courseId}/image`, {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    // FormData will set the Content-Type header automatically
+                },
+                body: formData,
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'Failed to update course image');
+            }
+
+            const data = await response.json();
+            console.log('✅ Course image updated:', data);
+            return data;
+        } catch (error) {
+            console.error('❌ Error updating course image:', error);
             throw error;
         }
     }

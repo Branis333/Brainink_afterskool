@@ -13,6 +13,7 @@ import { CourseProgressScreen } from '../screens/course/CourseProgressScreen';
 import { StudySessionScreen } from '../screens/course/StudySessionScreen';
 import { CourseAssignmentScreen } from '../screens/course/CourseAssignmentScreen';
 import { CourseSearchScreen } from '../screens/course/CourseSearchScreen';
+import { MyCoursesScreen } from '../screens/course/MyCourses';
 
 // Grades Management Screens
 import { GradesOverviewScreen } from '../screens/grades/GradesOverviewScreen';
@@ -71,6 +72,7 @@ export type RootStackParamList = {
         startWorkflow?: boolean;
     };
     CourseSearch: undefined;
+    MyCourses: undefined;
     // Grades Management
     GradesOverview: undefined;
     GradeDetails: {
@@ -166,6 +168,10 @@ export const AppNavigator: React.FC = () => {
                 <Stack.Screen
                     name="CourseSearch"
                     component={CourseSearchScreen}
+                />
+                <Stack.Screen
+                    name="MyCourses"
+                    component={MyCoursesScreen}
                 />
 
                 {/* Grades Management Screens */}

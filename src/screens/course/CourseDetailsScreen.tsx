@@ -14,10 +14,12 @@ import {
     Alert,
     ActivityIndicator,
     Dimensions,
+    Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import {
     afterSchoolService,
@@ -358,19 +360,18 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
     if (loading) {
         return (
             <SafeAreaView style={styles.container}>
-                <View style={styles.header}>
-                    <TouchableOpacity
-                        style={styles.backButton}
-                        onPress={() => navigation.goBack()}
-                    >
-                        <Text style={styles.backButtonText}>← Back</Text>
-                    </TouchableOpacity>
-                    <Text style={styles.headerTitle} numberOfLines={1}>
-                        {courseTitle}
-                    </Text>
+                <View style={styles.courseHeaderContainer}>
+                    <View style={styles.headerActions}>
+                        <TouchableOpacity
+                            style={styles.backIconButton}
+                            onPress={() => navigation.goBack()}
+                        >
+                            <Ionicons name="chevron-back" size={24} color="#333" />
+                        </TouchableOpacity>
+                    </View>
                 </View>
                 <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color="#007AFF" />
+                    <ActivityIndicator size="large" color="#7B68EE" />
                     <Text style={styles.loadingText}>Loading course details...</Text>
                 </View>
             </SafeAreaView>
@@ -380,14 +381,16 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
     if (!course) {
         return (
             <SafeAreaView style={styles.container}>
-                <View style={styles.header}>
-                    <TouchableOpacity
-                        style={styles.backButton}
-                        onPress={() => navigation.goBack()}
-                    >
-                        <Text style={styles.backButtonText}>← Back</Text>
-                    </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Course Not Found</Text>
+                <View style={styles.courseHeaderContainer}>
+                    <View style={styles.headerActions}>
+                        <TouchableOpacity
+                            style={styles.backIconButton}
+                            onPress={() => navigation.goBack()}
+                        >
+                            <Ionicons name="chevron-back" size={24} color="#333" />
+                        </TouchableOpacity>
+                    </View>
+                    <Text style={styles.newCourseTitle}>Course Not Found</Text>
                 </View>
                 <View style={styles.errorContainer}>
                     <Text style={styles.errorText}>Course not found</Text>
@@ -405,86 +408,70 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
     // Render course header
     const renderCourseHeader = () => (
         <View style={styles.courseHeaderContainer}>
-            <Text style={styles.courseTitle}>{course.title}</Text>
-            <Text style={styles.courseSubject}>{course.subject}</Text>
-            <View style={styles.courseMetaContainer}>
-                <View style={styles.courseMeta}>
-                    <Text style={styles.courseMetaLabel}>Difficulty:</Text>
-                    <Text style={styles.courseMetaValue}>
+            {/* Back Button Only */}
+            <View style={styles.headerActions}>
+                <TouchableOpacity
+                    style={styles.backIconButton}
+                    onPress={() => navigation.goBack()}
+                >
+                    <Ionicons name="chevron-back" size={24} color="#333" />
+                </TouchableOpacity>
+            </View>
+
+            {/* Course Title */}
+            <Text style={styles.newCourseTitle}>{course.title}</Text>
+
+            {/* Course Subtitle/Description */}
+            <Text style={styles.courseSubtitle}>
+                {typeof course.description === 'string' && course.description.trim().length > 0
+                    ? course.description
+                    : `Learn ${course.subject} with interactive lessons and assignments`}
+            </Text>
+
+            {/* Course Tags */}
+            <View style={styles.courseTags}>
+                <View style={styles.difficultyTag}>
+                    <Text style={styles.tagText}>
                         {course.difficulty_level.charAt(0).toUpperCase() + course.difficulty_level.slice(1)}
                     </Text>
                 </View>
-                <View style={styles.courseMeta}>
-                    <Text style={styles.courseMetaLabel}>Age Range:</Text>
-                    <Text style={styles.courseMetaValue}>
+                <View style={styles.ageTag}>
+                    <Text style={styles.tagText}>
                         {course.age_min}-{course.age_max} years
                     </Text>
                 </View>
             </View>
 
-            {/* Progress Overview */}
-            {progress && (
-                <View style={styles.progressOverview}>
-                    <Text style={styles.progressTitle}>Your Progress</Text>
-                    <View style={styles.progressStats}>
-                        <View style={styles.progressStat}>
-                            <Text style={styles.progressStatValue}>
-                                {progress.lessons_completed}/{progress.total_lessons}
-                            </Text>
-                            <Text style={styles.progressStatLabel}>Lessons</Text>
-                        </View>
-                        <View style={styles.progressStat}>
-                            <Text style={styles.progressStatValue}>
-                                {Math.round(progress.completion_percentage)}%
-                            </Text>
-                            <Text style={styles.progressStatLabel}>Complete</Text>
-                        </View>
-                        <View style={styles.progressStat}>
-                            <Text style={styles.progressStatValue}>
-                                {progress.average_score ? `${Math.round(progress.average_score)}%` : 'N/A'}
-                            </Text>
-                            <Text style={styles.progressStatLabel}>Avg Score</Text>
-                        </View>
+            {/* Course Image - Display actual image if available, otherwise placeholder */}
+            <View style={styles.courseImageContainer}>
+                {course?.image ? (
+                    <Image
+                        source={{ uri: `data:image/jpeg;base64,${course.image}` }}
+                        style={styles.courseImagePlaceholder}
+                        resizeMode="cover"
+                    />
+                ) : (
+                    <View style={[styles.courseImagePlaceholder, { backgroundColor: '#7B68EE' }]}>
+                        <Ionicons name="library" size={60} color="#FFFFFF" />
                     </View>
-                    <View style={styles.progressBarContainer}>
-                        <View style={styles.progressBar}>
-                            <View
-                                style={[
-                                    styles.progressFill,
-                                    { width: `${progress.completion_percentage}%` }
-                                ]}
-                            />
-                        </View>
-                        <TouchableOpacity
-                            style={styles.progressDetailsButton}
-                            onPress={navigateToProgress}
-                        >
-                            <Text style={styles.progressDetailsButtonText}>View Details</Text>
-                        </TouchableOpacity>
-                    </View>
-                </View>
-            )}
+                )}
+            </View>
 
-            {/* Course Description */}
-            {typeof course.description === 'string' && course.description.trim().length > 0 && (
-                <View style={styles.descriptionContainer}>
-                    <Text style={styles.descriptionText}>{course.description}</Text>
-                </View>
-            )}
-
-            {/* Enroll CTA */}
-            <View style={{ marginTop: 16 }}>
+            {/* Enroll Button */}
+            <View style={styles.enrollSection}>
                 {isEnrolled || progress || assignments.length > 0 ? (
-                    <View style={[styles.enrollButton, { backgroundColor: '#28A745' }]}>
-                        <Text style={styles.enrollButtonText}>Enrolled</Text>
-                    </View>
+                    <TouchableOpacity style={styles.enrolledButton}>
+                        <Text style={styles.enrolledButtonText}>Enrolled</Text>
+                    </TouchableOpacity>
                 ) : (
                     <TouchableOpacity
                         onPress={handleEnroll}
                         disabled={enrolling}
-                        style={[styles.enrollButton, enrolling && { opacity: 0.7 }]}
+                        style={[styles.enrollNowButton, enrolling && { opacity: 0.7 }]}
                     >
-                        <Text style={styles.enrollButtonText}>{enrolling ? 'Enrolling…' : 'Enroll in Course'}</Text>
+                        <Text style={styles.enrollNowButtonText}>
+                            {enrolling ? 'Enrolling…' : 'Buy Now'}
+                        </Text>
                     </TouchableOpacity>
                 )}
             </View>
@@ -496,29 +483,31 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
     const hasBlocks = blocks.length > 0;
 
     const renderTabNavigation = () => (
-        <View style={styles.tabContainer}>
+        <View style={styles.modernTabContainer}>
             <TouchableOpacity
-                style={[styles.tab, activeTab === 'lessons' && styles.activeTab]}
+                style={[styles.modernTab, activeTab === 'lessons' && styles.modernTabActive]}
                 onPress={() => onTabChange('lessons')}
             >
-                <Text style={[styles.tabText, activeTab === 'lessons' && styles.activeTabText]}>
-                    {hasLessons ? 'Lessons' : hasBlocks ? 'Blocks' : 'Lessons'} ({hasLessons ? course.lessons?.length || 0 : hasBlocks ? blocks.length : 0})
+                <Text style={[styles.modernTabText, activeTab === 'lessons' && styles.modernTabTextActive]}>
+                    {hasLessons ? 'Chapters' : hasBlocks ? 'Blocks' : 'Chapters'}
                 </Text>
             </TouchableOpacity>
+
             <TouchableOpacity
-                style={[styles.tab, activeTab === 'progress' && styles.activeTab]}
-                onPress={() => onTabChange('progress')}
-            >
-                <Text style={[styles.tabText, activeTab === 'progress' && styles.activeTabText]}>
-                    Progress
-                </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-                style={[styles.tab, activeTab === 'assignments' && styles.activeTab]}
+                style={[styles.modernTab, activeTab === 'assignments' && styles.modernTabActive]}
                 onPress={() => onTabChange('assignments')}
             >
-                <Text style={[styles.tabText, activeTab === 'assignments' && styles.activeTabText]}>
-                    Assignments ({assignments.length})
+                <Text style={[styles.modernTabText, activeTab === 'assignments' && styles.modernTabTextActive]}>
+                    File
+                </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+                style={[styles.modernTab, activeTab === 'progress' && styles.modernTabActive]}
+                onPress={() => onTabChange('progress')}
+            >
+                <Text style={[styles.modernTabText, activeTab === 'progress' && styles.modernTabTextActive]}>
+                    Discussions
                 </Text>
             </TouchableOpacity>
         </View>
@@ -661,22 +650,12 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                                         ]}
                                         onPress={() => setSelectedWeek(weekNumber)}
                                     >
-                                        <View style={styles.weekPillContent}>
-                                            <View style={[
-                                                styles.weekProgressIndicator,
-                                                {
-                                                    backgroundColor: progressPercent === 0 ? '#E0E0E0' :
-                                                        progressPercent < 50 ? '#666' :
-                                                            progressPercent === 100 ? '#000' : '#666'
-                                                }
-                                            ]} />
-                                            <Text style={[
-                                                styles.weekPillText,
-                                                isSelected && styles.weekPillTextSelected
-                                            ]}>
-                                                week {weekNumber}
-                                            </Text>
-                                        </View>
+                                        <Text style={[
+                                            styles.weekPillText,
+                                            isSelected && styles.weekPillTextSelected
+                                        ]}>
+                                            week {weekNumber}
+                                        </Text>
                                     </TouchableOpacity>
                                 );
                             })}
@@ -986,19 +965,6 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
 
     return (
         <SafeAreaView style={styles.container}>
-            {/* Header */}
-            <View style={styles.header}>
-                <TouchableOpacity
-                    style={styles.backButton}
-                    onPress={() => navigation.goBack()}
-                >
-                    <Text style={styles.backButtonText}>← Back</Text>
-                </TouchableOpacity>
-                <Text style={styles.headerTitle} numberOfLines={1}>
-                    {course.title}
-                </Text>
-            </View>
-
             <ScrollView
                 style={styles.scrollView}
                 showsVerticalScrollIndicator={false}
@@ -1019,31 +985,9 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#f8f9fa',
+        backgroundColor: '#F8F9FC',
     },
     scrollView: {
-        flex: 1,
-    },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 20,
-        paddingVertical: 16,
-        backgroundColor: '#fff',
-        borderBottomWidth: 1,
-        borderBottomColor: '#e0e0e0',
-    },
-    backButton: {
-        marginRight: 16,
-    },
-    backButtonText: {
-        fontSize: 16,
-        color: '#007AFF',
-    },
-    headerTitle: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        color: '#1a1a1a',
         flex: 1,
     },
     sectionHeading: {
@@ -1085,44 +1029,180 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '600',
     },
+
+    // New Modern Course Header Styles
     courseHeaderContainer: {
-        backgroundColor: '#fff',
-        padding: 20,
-        marginBottom: 16,
+        backgroundColor: '#FFFFFF',
+        paddingHorizontal: 20,
+        paddingTop: 16,
+        paddingBottom: 24,
+        borderBottomLeftRadius: 20,
+        borderBottomRightRadius: 20,
     },
-    courseTitle: {
-        fontSize: 24,
-        fontWeight: 'bold',
-        color: '#1a1a1a',
-        marginBottom: 8,
-    },
-    courseSubject: {
-        fontSize: 16,
-        color: '#007AFF',
-        marginBottom: 16,
-    },
-    courseMetaContainer: {
+    headerActions: {
         flexDirection: 'row',
+        justifyContent: 'flex-start',
+        alignItems: 'center',
         marginBottom: 20,
     },
-    courseMeta: {
-        marginRight: 24,
+    backIconButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: '#F8F9FC',
+        justifyContent: 'center',
+        alignItems: 'center',
     },
-    courseMetaLabel: {
-        fontSize: 12,
-        color: '#666',
-        marginBottom: 2,
+    actionButtons: {
+        flexDirection: 'row',
+        gap: 12,
     },
-    courseMetaValue: {
+    actionIcon: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: '#F8F9FC',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    newCourseTitle: {
+        fontSize: 28,
+        fontWeight: 'bold',
+        color: '#1A1A1A',
+        marginBottom: 12,
+        textAlign: 'center',
+    },
+    courseSubtitle: {
         fontSize: 14,
-        color: '#1a1a1a',
+        color: '#666',
+        lineHeight: 20,
+        textAlign: 'center',
+        marginBottom: 20,
+        paddingHorizontal: 10,
+    },
+    courseTags: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        gap: 12,
+        marginBottom: 24,
+    },
+    difficultyTag: {
+        backgroundColor: '#E8F8F7',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 16,
+    },
+    ageTag: {
+        backgroundColor: '#FFF3E0',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 16,
+    },
+    tagText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#333',
+    },
+    courseImageContainer: {
+        alignItems: 'center',
+        marginBottom: 24,
+        paddingHorizontal: 0,
+    },
+    courseImagePlaceholder: {
+        width: '100%',
+        height: 200,
+        borderRadius: 16,
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.1,
+        shadowRadius: 8,
+        elevation: 4,
+        marginHorizontal: 0,
+    },
+    enrollSection: {
+        marginTop: 8,
+    },
+    enrollNowButton: {
+        backgroundColor: '#7B68EE',
+        paddingVertical: 16,
+        borderRadius: 12,
+        alignItems: 'center',
+        shadowColor: '#7B68EE',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 4,
+    },
+    enrollNowButtonText: {
+        color: '#FFFFFF',
+        fontSize: 16,
         fontWeight: '600',
     },
-    progressOverview: {
-        backgroundColor: '#f8f9fa',
+    enrolledButton: {
+        backgroundColor: '#34C759',
+        paddingVertical: 16,
         borderRadius: 12,
-        padding: 16,
-        marginBottom: 16,
+        alignItems: 'center',
+    },
+    enrolledButtonText: {
+        color: '#FFFFFF',
+        fontSize: 16,
+        fontWeight: '600',
+    },
+
+    // Modern Tab Navigation Styles
+    modernTabContainer: {
+        flexDirection: 'row',
+        backgroundColor: '#FFFFFF',
+        marginHorizontal: 20,
+        marginVertical: 16,
+        borderRadius: 12,
+        padding: 4,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+        elevation: 2,
+    },
+    modernTab: {
+        flex: 1,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 8,
+        alignItems: 'center',
+    },
+    modernTabActive: {
+        backgroundColor: '#34C759',
+    },
+    modernTabText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#8E8E93',
+    },
+    modernTabTextActive: {
+        color: '#FFFFFF',
+    },
+
+    // Content Styles
+    contentContainer: {
+        paddingHorizontal: 20,
+    },
+    emptyContainer: {
+        alignItems: 'center',
+        paddingVertical: 60,
+        paddingHorizontal: 40,
+    },
+    emptyText: {
+        fontSize: 16,
+        color: '#666',
+        marginBottom: 8,
+    },
+    emptySubtext: {
+        fontSize: 14,
+        color: '#999',
+        textAlign: 'center',
     },
     progressTitle: {
         fontSize: 16,
@@ -1219,24 +1299,7 @@ const styles = StyleSheet.create({
         color: '#007AFF',
         fontWeight: '600',
     },
-    contentContainer: {
-        paddingHorizontal: 20,
-    },
-    emptyContainer: {
-        alignItems: 'center',
-        paddingVertical: 60,
-        paddingHorizontal: 40,
-    },
-    emptyText: {
-        fontSize: 16,
-        color: '#666',
-        marginBottom: 8,
-    },
-    emptySubtext: {
-        fontSize: 14,
-        color: '#999',
-        textAlign: 'center',
-    },
+
     // Week organization styles
     weekSection: {
         backgroundColor: '#fff',
@@ -1320,37 +1383,33 @@ const styles = StyleSheet.create({
         gap: 8,
     },
     weekPill: {
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        borderRadius: 20,
-        backgroundColor: '#f0f0f0',
-        borderWidth: 1.5,
-        borderColor: '#e0e0e0',
-        marginHorizontal: 4,
-        minWidth: 85,
+        paddingHorizontal: 24,
+        paddingVertical: 14,
+        borderRadius: 25,
+        backgroundColor: '#E5E7EB',
+        marginHorizontal: 6,
+        minWidth: 100,
         alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.05,
+        shadowRadius: 4,
+        elevation: 2,
     },
     weekPillSelected: {
-        backgroundColor: '#007AFF',
-        borderColor: '#007AFF',
-    },
-    weekPillContent: {
-        alignItems: 'center',
-        gap: 4,
-    },
-    weekProgressIndicator: {
-        width: 14,
-        height: 14,
-        borderRadius: 7,
-        marginBottom: 2,
+        backgroundColor: '#7B68EE',
+        shadowColor: '#7B68EE',
+        shadowOpacity: 0.3,
     },
     weekPillText: {
-        fontSize: 12,
+        fontSize: 14,
         fontWeight: '600',
-        color: '#333',
+        color: '#374151',
+        textAlign: 'center',
     },
     weekPillTextSelected: {
-        color: '#fff',
+        color: '#FFFFFF',
     },
     weekBlocksContainer: {
         paddingHorizontal: 16,
