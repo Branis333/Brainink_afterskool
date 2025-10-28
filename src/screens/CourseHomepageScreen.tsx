@@ -36,8 +36,9 @@ interface Props {
 type CourseCategory = 'all' | 'in-progress' | 'completed' | 'beginner' | 'intermediate' | 'advanced';
 
 const { width } = Dimensions.get('window');
-const CARD_WIDTH = width * 0.42; // Wider cards to match screenshot
-const CARD_MARGIN = 10;
+// Slightly widen cards so longer labels (e.g., "modules") fit without wrapping
+const CARD_WIDTH = width * 0.48;
+const CARD_MARGIN = 12;
 
 export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
     const { token, user } = useAuth();
@@ -312,7 +313,7 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
                     <View style={styles.horizontalMetaRow}>
                         <View style={styles.metaItem}>
                             <Ionicons name="time-outline" size={14} color="#26D9CA" />
-                            <Text style={styles.metaText}>{course.blocks_per_week || 2} blocks</Text>
+                            <Text style={styles.metaText}>{course.blocks_per_week || 2} modules</Text>
                         </View>
                         <View style={styles.metaItem}>
                             <Ionicons name="calendar-outline" size={14} color="#26D9CA" />
@@ -817,7 +818,7 @@ const styles = StyleSheet.create({
     },
     cardImagePlaceholder: {
         width: '100%',
-        height: 85,
+        height: 96,
         justifyContent: 'center',
         alignItems: 'center',
         borderTopLeftRadius: 16,
@@ -827,7 +828,7 @@ const styles = StyleSheet.create({
         overflow: 'hidden',
     },
     horizontalCardContent: {
-        padding: 8,
+        padding: 10,
     },
     cardBadge: {
         backgroundColor: '#FFE9E0',
