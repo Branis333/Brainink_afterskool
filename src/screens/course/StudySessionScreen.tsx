@@ -229,6 +229,35 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
         setAiInteractions(state.interactions);
     }, []);
 
+    // Background helper: retry fetching the lesson plan if it isn't ready yet
+    const fetchLessonPlanWithRetries = useCallback(
+        async (sessionId: number, tries: number = 3) => {
+            if (!token || !sessionId) return;
+            const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+            let delay = 350; // start with ~350ms backoff
+            for (let i = 0; i < tries; i++) {
+                try {
+                    const plan = await aiTutorService.getLessonPlan(token, sessionId);
+                    if (plan && Array.isArray(plan.segments) && plan.segments.length > 0) {
+                        setLessonPlan(plan);
+                        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+                            console.log('[AI Tutor] lesson plan fetched (retry loop)', { segments: plan.segments.length });
+                        }
+                        return;
+                    }
+                } catch (e) {
+                    // ignore and retry
+                }
+                await sleep(delay);
+                delay = Math.min(1500, Math.round(delay * 1.8));
+            }
+            if (typeof __DEV__ !== 'undefined' && __DEV__) {
+                console.warn('[AI Tutor] lesson plan not available after retries');
+            }
+        },
+        [token]
+    );
+
     // AURORA STATE MACHINE: Determine what to display based on backend session status
     const auroraDisplayState = useMemo(() => {
         if (!aiSessionSnapshot) {
@@ -298,6 +327,8 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                 if (typeof __DEV__ !== 'undefined' && __DEV__) {
                     console.warn('[AI Tutor] lesson plan fetch (existing session) failed', e);
                 }
+                // Kick off background retries in case plan is being generated server-side
+                fetchLessonPlanWithRetries(aiState.session.session_id, 3);
             }
             setAiStatus('ready');
             setAiError(null);
@@ -314,8 +345,8 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
         // Do not early-return on 'loading' here; caller may have just toggled the UI.
         // Always attempt to start or fetch the session when none exists.
 
-    setAiStatus('loading');
-    setAiError(null);
+        setAiStatus('loading');
+        setAiError(null);
 
         const payload: StartSessionPayload = {
             course_id: courseId,
@@ -324,7 +355,26 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
         if (blockId) payload.block_id = blockId;
 
         try {
-            const state = await aiTutorService.startSession(token, payload);
+            // First try to resume any in-progress session for this context to avoid re-generation and get an immediate tutor turn
+            let state: TutorSessionState | null = null;
+            try {
+                state = await aiTutorService.resumeSession(token, { course_id: courseId, block_id: blockId, lesson_id: lessonId });
+                if (typeof __DEV__ !== 'undefined' && __DEV__) {
+                    console.log('[AI Tutor] resumeSession succeeded', {
+                        session_id: state?.session?.session_id,
+                        status: state?.session?.status,
+                        tutor_turn_present: !!state?.tutor_turn,
+                    });
+                }
+            } catch (resumeErr) {
+                if (typeof __DEV__ !== 'undefined' && __DEV__) {
+                    console.log('[AI Tutor] resumeSession not available, starting new session', resumeErr);
+                }
+            }
+
+            if (!state) {
+                state = await aiTutorService.startSession(token, payload);
+            }
             updateAiState(state);
             // Fetch pre-generated lesson plan for highlights/navigation
             try {
@@ -334,6 +384,8 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                 if (typeof __DEV__ !== 'undefined' && __DEV__) {
                     console.warn('[AI Tutor] lesson plan not available yet', e);
                 }
+                // Start background retries so it appears as soon as it's generated
+                fetchLessonPlanWithRetries(state.session.session_id, 3);
             }
             setAiStatus('ready');
             return state;
@@ -344,7 +396,7 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
             console.error('[StudySessionScreen] AI session start error:', message);
             return null;
         }
-    }, [aiState, aiStatus, blockId, courseId, lessonId, token, updateAiState]);
+    }, [aiState, aiStatus, blockId, courseId, lessonId, token, updateAiState, fetchLessonPlanWithRetries, lessonPlan]);
 
     const computeHighlightsForSection = useCallback(
         (
