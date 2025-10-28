@@ -21,7 +21,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useFocusEffect } from '@react-navigation/native';
 import { WebView } from 'react-native-webview';
+import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../../context/AuthContext';
+import { AuroraGuide, AuroraMicrocard, AuroraMicrocardData, AuroraCueData } from '../../components/AuroraGuide';
+import { HighlightableText, HighlightRange } from '../../components/HighlightableText';
 import {
     afterSchoolService,
     StudySession,
@@ -31,6 +34,15 @@ import {
     CourseWithBlocks,
     StudentAssignment
 } from '../../services/afterSchoolService';
+import {
+    aiTutorService,
+    StartSessionPayload,
+    TutorInteraction,
+    TutorSessionSnapshot,
+    TutorSessionState,
+    TutorTurn,
+    LessonPlan,
+} from '../../services/aiTutorService';
 
 type NavigationProp = NativeStackNavigationProp<any>;
 type RouteProp_ = RouteProp<{
@@ -55,7 +67,95 @@ interface StudySection {
     title: string;
     icon: string;
     content: ReactNode;
+    rawText?: string;
 }
+
+type SectionMicrocards = Record<string, AuroraMicrocardData[]>;
+
+const sectionIntroCueId = (sectionId: string) => `section-intro-${sectionId}`;
+const practiceCueId = (sectionId: string) => `practice-${sectionId}`;
+const nextSectionCueId = (sectionId: string) => `next-section-${sectionId}`;
+
+const extractSentences = (text: string): string[] => {
+    return text
+        .split(/(?<=[.!?])\s+/)
+        .map((sentence) => sentence.trim())
+        .filter((sentence) => sentence.length > 0);
+};
+
+const findHighlightRange = (
+    source: string,
+    snippet: string,
+    tone: HighlightRange['tone'] = 'info'
+): HighlightRange | null => {
+    const cleaned = snippet?.trim();
+    if (!cleaned) return null;
+    const lowerSource = source.toLowerCase();
+    const lowerSnippet = cleaned.toLowerCase();
+    const index = lowerSource.indexOf(lowerSnippet);
+    if (index === -1) return null;
+    return {
+        start: index,
+        end: Math.min(index + cleaned.length, source.length),
+        tone,
+    };
+};
+
+const computeHighlightRanges = (
+    text: string,
+    hints: string[] = [],
+    options: {
+        maxHighlights?: number;
+        preferredLength?: number;
+    } = {}
+): HighlightRange[] => {
+    const { maxHighlights = 4, preferredLength = 140 } = options;
+    if (!text) return [];
+    const ranges: HighlightRange[] = [];
+    const seen = new Set<string>();
+
+    const pushRange = (range: HighlightRange | null) => {
+        if (!range) return;
+        const key = `${range.start}-${range.end}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        ranges.push(range);
+    };
+
+    hints.filter(Boolean).forEach((hint) => {
+        const trimmed = hint.trim();
+        if (!trimmed) {
+            return;
+        }
+
+        const segments = extractSentences(trimmed);
+        segments.forEach((segment) => {
+            if (ranges.length >= maxHighlights) return;
+            if (segment.length > preferredLength) {
+                const midpoint = Math.floor(segment.length / 2);
+                const pivot = segment.slice(0, midpoint).lastIndexOf(' ');
+                const firstHalf = segment.slice(0, pivot > 0 ? pivot : midpoint).trim();
+                const secondHalf = segment.slice(pivot > 0 ? pivot : midpoint).trim();
+                [firstHalf, secondHalf].forEach((half) => {
+                    if (half.length >= 24 && ranges.length < maxHighlights) {
+                        pushRange(findHighlightRange(text, half));
+                    }
+                });
+            } else if (segment.length >= 18) {
+                pushRange(findHighlightRange(text, segment));
+            }
+        });
+    });
+
+    if (!ranges.length) {
+        const sentences = extractSentences(text).filter((sentence) => sentence.length >= 18);
+        sentences.slice(0, maxHighlights).forEach((sentence, index) => {
+            pushRange(findHighlightRange(text, sentence, index === 0 ? 'success' : 'info'));
+        });
+    }
+
+    return ranges.slice(0, maxHighlights);
+};
 
 const { width, height } = Dimensions.get('window');
 
@@ -74,8 +174,252 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
     const [isAlreadyCompleted, setIsAlreadyCompleted] = useState(false);
     const [isMenuVisible, setMenuVisible] = useState(false);
     const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
+    const [auroraEnabled, setAuroraEnabled] = useState(false);
+    const [auroraAnchorOpen, setAuroraAnchorOpen] = useState(false);
+    const [aiStatus, setAiStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
+    const [aiError, setAiError] = useState<string | null>(null);
+    const [aiSessionSnapshot, setAiSessionSnapshot] = useState<TutorSessionSnapshot | null>(null);
+    const [aiTurn, setAiTurn] = useState<TutorTurn | null>(null);
+    const [aiInteractions, setAiInteractions] = useState<TutorInteraction[]>([]);
+    const [aiState, setAiState] = useState<TutorSessionState | null>(null);
+    const [lessonPlan, setLessonPlan] = useState<LessonPlan | null>(null);
+    const [aiHighlights, setAiHighlights] = useState<Record<string, HighlightRange[]>>({});
+    const [aiProcessingSectionId, setAiProcessingSectionId] = useState<string | null>(null);
+    const [aiFocusedSectionId, setAiFocusedSectionId] = useState<string | null>(null);
+    const [auroraMicrocards, setAuroraMicrocards] = useState<SectionMicrocards>({});
+    const [auroraCue, setAuroraCue] = useState<AuroraCueData | null>(null);
+    const [explainCountSincePractice, setExplainCountSincePractice] = useState(0);
+    const dismissedCueIdsRef = useRef<Set<string>>(new Set());
+    const lastAutoContinueTurnIdRef = useRef<string | null>(null);
+    const lastPracticeTurnIdRef = useRef<string | null>(null);
+    const [autoAdvanceEnabled, setAutoAdvanceEnabled] = useState(false);
+    const lastPrimedSectionRef = useRef<string | null>(null);
+    // Fallback cursor for rotating highlights when hints don't map to text
+    const fallbackHighlightIndexRef = useRef<Record<string, number>>({});
+    const [ghostHighlightsEnabled] = useState<boolean>(true);
 
     const scrollViewRef = useRef<ScrollView>(null);
+
+    const markCueDismissed = useCallback((cueId?: string | null) => {
+        if (!cueId) {
+            return;
+        }
+        dismissedCueIdsRef.current.add(cueId);
+    }, []);
+
+    const updateAiState = useCallback((state: TutorSessionState) => {
+        // Debug: log incoming AI session state for tracing UI updates
+        if (typeof __DEV__ !== 'undefined' && __DEV__) {
+            try {
+                console.log('[AI] updateAiState:', {
+                    session_id: state?.session?.session_id,
+                    status: state?.session?.status,
+                    tutor_turn_present: !!state?.tutor_turn,
+                    tutor_turn_narration: state?.tutor_turn?.narration?.slice?.(0, 180),
+                    interactions_count: (state?.interactions || []).length,
+                });
+            } catch (e) {
+                console.warn('[AI] updateAiState log failed', e);
+            }
+        }
+        setAiState(state);
+        setAiSessionSnapshot(state.session);
+        setAiTurn(state.tutor_turn);
+        setAiInteractions(state.interactions);
+    }, []);
+
+    // AURORA STATE MACHINE: Determine what to display based on backend session status
+    const auroraDisplayState = useMemo(() => {
+        if (!aiSessionSnapshot) {
+            return { mode: 'idle' as const, showNarration: false, showQuestion: false, showCheckpoint: false, showSuggestions: false };
+        }
+
+        const status = aiSessionSnapshot.status;
+
+        // Mode: AWAITING_CHECKPOINT - Only show checkpoint, hide suggestions
+        if (status === 'awaiting_checkpoint') {
+            return {
+                mode: 'awaiting_checkpoint' as const,
+                showNarration: true,
+                showQuestion: false,
+                showCheckpoint: true,
+                showSuggestions: false,
+                checkpointData: aiTurn?.checkpoint || null,
+            };
+        }
+
+        // Mode: ACTIVE - Show narration, optionally question, optionally checkpoint, optionally suggestions
+        if (status === 'active') {
+            const hasQuestion = !!aiTurn?.comprehension_check;
+            const hasCheckpoint = aiTurn?.checkpoint && aiTurn.checkpoint.required;
+
+            return {
+                mode: 'active' as const,
+                showNarration: true,
+                showQuestion: hasQuestion,
+                showCheckpoint: hasCheckpoint && !hasQuestion, // Show checkpoint after question is shown
+                showSuggestions: !hasCheckpoint && !hasQuestion, // Only show suggestions if no checkpoint or question awaiting
+                questionText: aiTurn?.comprehension_check || null,
+                checkpointData: hasCheckpoint ? aiTurn?.checkpoint : null,
+            };
+        }
+
+        // Mode: COMPLETED - Show completion state
+        if (status === 'completed') {
+            return {
+                mode: 'completed' as const,
+                showNarration: false,
+                showQuestion: false,
+                showCheckpoint: false,
+                showSuggestions: false,
+            };
+        }
+
+        // Default/other modes (error, abandoned, etc.)
+        return {
+            mode: 'idle' as const,
+            showNarration: false,
+            showQuestion: false,
+            showCheckpoint: false,
+            showSuggestions: false,
+        };
+    }, [aiSessionSnapshot, aiTurn]);
+
+    const ensureAiSession = useCallback(async (): Promise<TutorSessionState | null> => {
+        if (aiState?.session?.session_id) {
+            // Ensure lesson plan is loaded and mark UI ready
+            try {
+                if (!lessonPlan) {
+                    const plan = await aiTutorService.getLessonPlan(token!, aiState.session.session_id);
+                    setLessonPlan(plan);
+                }
+            } catch (e) {
+                if (typeof __DEV__ !== 'undefined' && __DEV__) {
+                    console.warn('[AI Tutor] lesson plan fetch (existing session) failed', e);
+                }
+            }
+            setAiStatus('ready');
+            setAiError(null);
+            return aiState;
+        }
+
+        if (!token) {
+            Alert.alert('AI Assistant', 'Please sign in to use AI mode.');
+            setAiError('Sign-in required for AI mode');
+            setAiStatus('error');
+            return null;
+        }
+
+        // Do not early-return on 'loading' here; caller may have just toggled the UI.
+        // Always attempt to start or fetch the session when none exists.
+
+    setAiStatus('loading');
+    setAiError(null);
+
+        const payload: StartSessionPayload = {
+            course_id: courseId,
+        };
+        if (lessonId) payload.lesson_id = lessonId;
+        if (blockId) payload.block_id = blockId;
+
+        try {
+            const state = await aiTutorService.startSession(token, payload);
+            updateAiState(state);
+            // Fetch pre-generated lesson plan for highlights/navigation
+            try {
+                const plan = await aiTutorService.getLessonPlan(token, state.session.session_id);
+                setLessonPlan(plan);
+            } catch (e) {
+                if (typeof __DEV__ !== 'undefined' && __DEV__) {
+                    console.warn('[AI Tutor] lesson plan not available yet', e);
+                }
+            }
+            setAiStatus('ready');
+            return state;
+        } catch (err) {
+            const message = err instanceof Error ? err.message : 'Unable to start AI assistant right now.';
+            setAiError(message);
+            setAiStatus('error');
+            console.error('[StudySessionScreen] AI session start error:', message);
+            return null;
+        }
+    }, [aiState, aiStatus, blockId, courseId, lessonId, token, updateAiState]);
+
+    const computeHighlightsForSection = useCallback(
+        (
+            sectionId: string,
+            sourceText: string,
+            hints: string[] = [],
+            intent: 'explain' | 'quiz' | 'context' | 'custom' = 'explain',
+            options: {
+                exclusive?: boolean;
+                tone?: HighlightRange['tone'];
+            } = {}
+        ) => {
+            if (!sourceText) return;
+
+            let ranges: HighlightRange[] = [];
+
+            if (options.exclusive && hints.length) {
+                const tone = options.tone || 'success';
+                const focused = hints
+                    .map((hint) => findHighlightRange(sourceText, hint, tone))
+                    .filter((range): range is HighlightRange => !!range);
+
+                if (focused.length) {
+                    ranges = [focused[0]];
+                }
+            }
+
+            if (!ranges.length) {
+                const maxHighlights = intent === 'explain' ? 5 : 2;
+                const preferredLength = intent === 'explain' ? 110 : 80;
+                ranges = computeHighlightRanges(sourceText, hints, { maxHighlights, preferredLength });
+            }
+
+            if (!ranges.length) return;
+
+            setAiHighlights((prev) => {
+                const existing = prev[sectionId];
+                if (
+                    existing &&
+                    existing.length === ranges.length &&
+                    existing.every(
+                        (item, index) =>
+                            item.start === ranges[index]?.start &&
+                            item.end === ranges[index]?.end &&
+                            item.tone === ranges[index]?.tone,
+                    )
+                ) {
+                    return prev;
+                }
+                return {
+                    ...prev,
+                    [sectionId]: ranges,
+                };
+            });
+        },
+        []
+    );
+
+    // Set ghost + current highlights in one pass for walkthrough
+    const setGhostHighlights = useCallback(
+        (sectionId: string, sourceText: string, snippets: string[], currentIdx: number) => {
+            if (!ghostHighlightsEnabled || !sourceText || snippets.length === 0) return;
+            const ranges: HighlightRange[] = [];
+            snippets.forEach((snip, idx) => {
+                const r = findHighlightRange(sourceText, snip, idx === currentIdx ? 'success' : 'info');
+                if (!r) return;
+                (r as any).weight = idx === currentIdx ? 'current' : 'ghost';
+                ranges.push(r);
+            });
+            if (ranges.length) {
+                setAiHighlights((prev) => ({ ...prev, [sectionId]: ranges }));
+            }
+        },
+        [ghostHighlightsEnabled]
+    );
+
 
     // Load content data (mark-done model - no session required)
     const loadSessionData = async () => {
@@ -562,6 +906,9 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
         const items: StudySection[] = [];
 
         if (block?.learning_objectives?.length || lesson?.learning_objectives) {
+            const objectivesText = block?.learning_objectives?.length
+                ? block.learning_objectives.map((objective) => `• ${objective}`).join('\n')
+                : lesson?.learning_objectives || '';
             items.push({
                 id: 'learning-objectives',
                 title: 'Learning Objectives',
@@ -569,16 +916,18 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                 content: (
                     <View style={styles.objectivesCard}>
                         <Text style={styles.objectivesTitle}>Learning Objectives</Text>
-                        {block?.learning_objectives?.length ? (
-                            <Text style={styles.objectivesText}>• {block.learning_objectives.join('\n• ')}</Text>
-                        ) : (
-                            <Text style={styles.objectivesText}>{lesson?.learning_objectives}</Text>
-                        )}
+                        <HighlightableText
+                            text={objectivesText}
+                            highlightRanges={aiHighlights['learning-objectives']}
+                            style={styles.objectivesText}
+                        />
                     </View>
-                )
+                ),
+                rawText: objectivesText,
             });
         }
 
+        const lessonContentText = block?.content || lesson?.content || '';
         items.push({
             id: 'course-content',
             title: block ? 'Block Content' : 'Lesson Content',
@@ -588,10 +937,12 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                     <Text style={styles.lessonContentTitle}>
                         {block ? 'Block Content' : 'Lesson Content'}
                     </Text>
-                    {(block?.content || lesson?.content) ? (
-                        <Text style={styles.lessonContentText}>
-                            {block?.content || lesson?.content}
-                        </Text>
+                    {lessonContentText ? (
+                        <HighlightableText
+                            text={lessonContentText}
+                            highlightRanges={aiHighlights['course-content']}
+                            style={styles.lessonContentText}
+                        />
                     ) : (
                         <View style={styles.noContentContainer}>
                             <Text style={styles.noContentText}>No content available</Text>
@@ -601,7 +952,8 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                         </View>
                     )}
                 </View>
-            )
+            ),
+            rawText: lessonContentText,
         });
 
         const videoSection = renderVideoResources();
@@ -638,19 +990,1191 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
             content: (
                 <View style={styles.tipsCard}>
                     <Text style={styles.tipsTitle}>Study Tips</Text>
-                    <Text style={styles.tipsText}>
-                        • Take notes while studying{'\n'}
-                        • Ask questions if you don't understand{'\n'}
-                        • Practice what you learn{'\n'}
-                        • Take breaks when needed{'\n'}
-                        • Review the material after completing
-                    </Text>
+                    <HighlightableText
+                        text={`• Take notes while studying\n• Ask questions if you don't understand\n• Practice what you learn\n• Take breaks when needed\n• Review the material after completing`}
+                        highlightRanges={aiHighlights['study-tips']}
+                        style={styles.tipsText}
+                    />
                 </View>
-            )
+            ),
+            rawText: `Take notes while studying. Ask questions if you don't understand. Practice what you learn. Take breaks when needed. Review the material after completing.`,
         });
 
         return items;
-    }, [block, lesson, expandedVideoIndex, relevantAssignments]);
+    }, [aiHighlights, block, lesson, expandedVideoIndex, relevantAssignments]);
+
+    const { activeSection, currentSectionIndex, previousSection, nextSection } = useMemo(() => {
+        if (!sections.length) {
+            return {
+                activeSection: null as StudySection | null,
+                currentSectionIndex: -1,
+                previousSection: null as StudySection | null,
+                nextSection: null as StudySection | null,
+            };
+        }
+
+        const fallback = sections[0];
+        const resolvedActive = activeSectionId
+            ? sections.find((section) => section.id === activeSectionId) || fallback
+            : fallback;
+        const index = sections.findIndex((section) => section.id === resolvedActive.id);
+
+        return {
+            activeSection: resolvedActive,
+            currentSectionIndex: index,
+            previousSection: index > 0 ? sections[index - 1] : null,
+            nextSection: index >= 0 && index < sections.length - 1 ? sections[index + 1] : null,
+        };
+    }, [sections, activeSectionId]);
+
+    const auroraSuggestions = useMemo(() => {
+        if (aiStatus === 'error') {
+            return ['Try again', 'Summarise this section', 'Give me a fun fact'];
+        }
+
+        const suggestions: string[] = [];
+        const seen = new Set<string>();
+        const push = (value?: string) => {
+            const trimmed = value?.trim();
+            if (!trimmed || seen.has(trimmed)) {
+                return;
+            }
+            seen.add(trimmed);
+            suggestions.push(trimmed);
+        };
+
+        // From backend: follow_up_prompts (not follow_up_options)
+        if (aiTurn?.follow_up_prompts?.length) {
+            aiTurn.follow_up_prompts.forEach(push);
+            // If the only prompt is Continue, keep UI focused on a single CTA
+            if (aiTurn.follow_up_prompts.length === 1 && aiTurn.follow_up_prompts[0].toLowerCase() === 'continue') {
+                return suggestions;
+            }
+        }
+        // Fallback alternatives
+        else if (aiTurn?.follow_up_options?.length) {
+            aiTurn.follow_up_options.forEach(push);
+        } else {
+            ['Explain differently', 'Quiz me on this', 'Give a real-world example'].forEach(push);
+        }
+
+        // Add comprehension check prompts if available
+        if (aiTurn?.comprehension_check) {
+            push('I need a hint');
+            push('Here is my answer');
+        }
+
+        if (activeSection) {
+            push(`Explain ${activeSection.title}`);
+            push(`Quiz me on ${activeSection.title}`);
+        }
+
+    // Keep extras minimal after structured follow-ups
+    push('Give me a quick exercise');
+
+        if (nextSection) {
+            push(`Continue to ${nextSection.title}`);
+        }
+
+        return suggestions.slice(0, 5);
+    }, [activeSection, aiStatus, aiTurn, nextSection]);
+
+    const auroraSummary = useMemo(() => {
+        if (activeSection) {
+            return activeSection.title;
+        }
+        const focused = sections.find((section) => section.id === aiFocusedSectionId);
+        if (focused) {
+            return focused.title;
+        }
+        return courseTitle;
+    }, [activeSection, aiFocusedSectionId, courseTitle, sections]);
+
+    const auroraMessage = useMemo(() => {
+        if (aiStatus === 'error') {
+            return aiError || 'Aurora is momentarily offline.';
+        }
+
+        const narration = aiTurn?.narration?.trim();
+        if (narration) {
+            return narration;
+        }
+
+        const summary = aiTurn?.summary?.trim();
+        if (summary) {
+            return summary;
+        }
+
+        if (activeSection) {
+            return `Highlight something in “${activeSection.title}” and Aurora will explain, quiz, or connect the dots.`;
+        }
+
+        return 'Highlight a section and invite Aurora to explain, quiz, or connect the dots.';
+    }, [activeSection, aiError, aiStatus, aiTurn]);
+
+    const getSectionPlainText = useCallback((sectionId: string) => {
+        const section = sections.find((item) => item.id === sectionId);
+        if (!section) return '';
+        return typeof section.rawText === 'string' ? section.rawText : '';
+    }, [sections]);
+
+    const pushAuroraMicrocard = useCallback((sectionId: string, card: AuroraMicrocardData) => {
+        setAuroraMicrocards((prev) => {
+            const existing = prev[sectionId] ?? [];
+            const filtered = existing.filter((item) => item.id !== card.id);
+            const next = [card, ...filtered].slice(0, 4);
+            if (existing.length === next.length && existing.every((item, index) => item.id === next[index]?.id)) {
+                return prev;
+            }
+            return {
+                ...prev,
+                [sectionId]: next,
+            };
+        });
+    }, []);
+
+    const buildAuroraMicrocard = useCallback((
+        intent: 'explain' | 'quiz' | 'context' | 'custom',
+        turn: TutorTurn | null,
+        sectionTitle: string,
+    ): AuroraMicrocardData | null => {
+        if (!turn) {
+            return null;
+        }
+
+        const tone: AuroraMicrocardData['tone'] = ((): AuroraMicrocardData['tone'] => {
+            if (turn.comprehension_check) {
+                return 'practice';
+            }
+            switch (intent) {
+                case 'quiz':
+                    return 'practice';
+                case 'context':
+                    return 'context';
+                default:
+                    return 'insight';
+            }
+        })();
+
+        let body = turn.summary || turn.narration || '';
+        if (turn.comprehension_check) {
+            const isString = typeof turn.comprehension_check === 'string';
+            let question = '';
+            let answers: string[] = [];
+            
+            if (isString) {
+                question = turn.comprehension_check as string;
+            } else {
+                const cc = turn.comprehension_check as any;
+                question = cc?.question || '';
+                answers = cc?.expected_answers?.filter(Boolean) ?? [];
+            }
+            
+            const answerLine = answers.length > 0 ? answers.join(', ') : 'Think about it!';
+            body = `${question}\n• ${answerLine}`;
+        }
+
+        const headline = (() => {
+            if (intent === 'quiz') {
+                return 'Quick Check';
+            }
+            if (intent === 'context') {
+                return `Context boost • ${sectionTitle}`;
+            }
+            if (intent === 'custom') {
+                return `Aurora Insight • ${sectionTitle}`;
+            }
+            return `Key idea • ${sectionTitle}`;
+        })();
+
+        const trimmedBody = body.trim();
+        if (!trimmedBody) {
+            return null;
+        }
+
+        return {
+            id: `${turn.turn_id}-${intent}-${Date.now()}`,
+            tone,
+            headline,
+            body: trimmedBody,
+            footnote: turn.reflection_prompt || undefined,
+            prompts: turn.follow_up_options && turn.follow_up_options.length > 0 ? turn.follow_up_options.slice(0, 3) : undefined,
+        };
+    }, []);
+
+    const handleToggleAiAssist = useCallback(async () => {
+        if (auroraEnabled) {
+            setAuroraEnabled(false);
+            setAuroraAnchorOpen(false);
+            setAiProcessingSectionId(null);
+            setAiFocusedSectionId(null);
+            setAuroraCue(null);
+            setAiError(null);
+            dismissedCueIdsRef.current.clear();
+            lastPrimedSectionRef.current = null;
+            return;
+        }
+
+    setAiError(null);
+    // Let ensureAiSession drive the loading state to avoid an early return inside it.
+        const state = await ensureAiSession();
+        if (!state) {
+            setAuroraEnabled(false);
+            setAuroraAnchorOpen(false);
+            return;
+        }
+
+        setAuroraEnabled(true);
+        setAuroraAnchorOpen(true);
+
+        const targetSectionId = activeSectionId || sections[0]?.id || null;
+        if (targetSectionId) {
+            setAiFocusedSectionId(targetSectionId);
+        }
+    }, [activeSectionId, auroraEnabled, ensureAiSession, sections]);
+
+    const handleToggleAuroraAnchor = useCallback(() => {
+        if (!auroraEnabled) {
+            handleToggleAiAssist();
+            return;
+        }
+        setAuroraAnchorOpen((prev) => !prev);
+    }, [auroraEnabled, handleToggleAiAssist]);
+
+    const handleDismissCue = useCallback(() => {
+        if (auroraCue?.id) {
+            markCueDismissed(auroraCue.id);
+        }
+        setAuroraCue(null);
+    }, [auroraCue, markCueDismissed]);
+
+    const requestAiResponse = useCallback(
+        async (
+            intent: 'explain' | 'quiz' | 'context' | 'custom',
+            sectionId?: string,
+            customPrompt?: string,
+            options: {
+                skipHighlightUpdate?: boolean;
+                highlightSnippet?: string;
+                exclusiveHighlight?: boolean;
+            } = {},
+        ) => {
+            const state = await ensureAiSession();
+            if (!state || !state.session?.session_id || !token) {
+                return;
+            }
+
+            const focusSectionId = sectionId || activeSectionId || sections[0]?.id || null;
+            const sectionText = focusSectionId ? getSectionPlainText(focusSectionId) : '';
+            const sectionTitle = sections.find((item) => item.id === focusSectionId)?.title || 'this section';
+            const isPracticeIntent = intent === 'quiz';
+
+            // If we already have highlights for this section, prefer focusing the explanation on the first one
+            let focusedSnippet = options.highlightSnippet;
+            if (!focusedSnippet && focusSectionId && aiHighlights[focusSectionId]?.length) {
+                const r = aiHighlights[focusSectionId][0];
+                if (r && sectionText) {
+                    focusedSnippet = sectionText.slice(r.start, r.end).trim();
+                }
+            }
+
+            let prompt = customPrompt || '';
+            if (!prompt) {
+                switch (intent) {
+                    case 'explain':
+                        if (focusedSnippet) {
+                            prompt = `Explain this specific part from the section "${sectionTitle}": "${focusedSnippet}". Keep it simple, concrete, and kid-friendly. Also connect it briefly to the rest of the section.`;
+                        } else {
+                            prompt = `Explain the section titled "${sectionTitle}" in the course using simple, friendly language for kids. Highlight the most important idea and relate it to the learner's everyday life.\nContent: ${sectionText.slice(0, 600)}`;
+                        }
+                        break;
+                    case 'quiz':
+                        if (focusedSnippet) {
+                            prompt = `Create one quick comprehension check about this part from "${sectionTitle}": "${focusedSnippet}". Provide the correct answer too. Keep it short and fun.`;
+                        } else {
+                            prompt = `Create one quick comprehension question and the answer based on this section titled "${sectionTitle}". Keep it short and fun.\nContent: ${sectionText.slice(0, 600)}`;
+                        }
+                        break;
+                    case 'context':
+                        if (focusedSnippet) {
+                            prompt = `Give helpful background context to better understand this part from "${sectionTitle}": "${focusedSnippet}".`;
+                        } else {
+                            prompt = `Give some background context that helps understand this section titled "${sectionTitle}".\nContent: ${sectionText.slice(0, 600)}`;
+                        }
+                        break;
+                    default:
+                        prompt = focusedSnippet
+                            ? `Explain this in a different way: "${focusedSnippet}"`
+                            : (sectionText ? `Explain this content in a new way: ${sectionText.slice(0, 600)}` : 'Explain the current topic again in a new way.');
+                        break;
+                }
+            }
+
+            setAiStatus('loading');
+            setAiError(null);
+            setAiProcessingSectionId(focusSectionId || null);
+            setAiFocusedSectionId(focusSectionId || null);
+            setAuroraAnchorOpen(true);
+
+            try {
+                const response = await aiTutorService.sendMessage(token, state.session.session_id, {
+                    input_type: 'text',
+                    message: prompt,
+                });
+                updateAiState(response);
+                setAiStatus('ready');
+                setAiProcessingSectionId(null);
+                setExplainCountSincePractice((prev) => (isPracticeIntent ? 0 : prev + 1));
+
+                if (focusSectionId) {
+                    const hints: string[] = [];
+                    if (response.tutor_turn?.summary) hints.push(response.tutor_turn.summary);
+                    if (response.tutor_turn?.narration) hints.push(response.tutor_turn.narration);
+                    const textSource = getSectionPlainText(focusSectionId);
+
+                    if (options.skipHighlightUpdate) {
+                        if (options.highlightSnippet) {
+                            computeHighlightsForSection(
+                                focusSectionId,
+                                textSource,
+                                [options.highlightSnippet],
+                                intent,
+                                { exclusive: options.exclusiveHighlight }
+                            );
+                        }
+                    } else {
+                        // If we had a focused snippet, pin the highlight to it; else compute from hints
+                        if (focusedSnippet) {
+                            computeHighlightsForSection(
+                                focusSectionId,
+                                textSource,
+                                [focusedSnippet],
+                                intent,
+                                { exclusive: true, tone: 'success' }
+                            );
+                        } else {
+                            // First try to highlight based on hints
+                            const beforeRanges = aiHighlights[focusSectionId];
+                            computeHighlightsForSection(focusSectionId, textSource, hints, intent);
+                            const afterRanges = {
+                                get: () => (aiHighlights[focusSectionId] || []) as HighlightRange[],
+                            };
+                            // If no change or failed to map hints, rotate a deterministic fallback snippet
+                            const prevRanges = beforeRanges || [];
+                            const nextRanges = afterRanges.get();
+                            const noChange =
+                                (prevRanges.length === nextRanges.length &&
+                                    prevRanges.every((r, i) =>
+                                        r && nextRanges[i] && r.start === nextRanges[i].start && r.end === nextRanges[i].end,
+                                    )) ||
+                                nextRanges.length === 0;
+                            if (noChange) {
+                                const fallbackList = computeHighlightRanges(textSource, [], { maxHighlights: 5, preferredLength: 110 });
+                                if (fallbackList.length > 0) {
+                                    const cursor = fallbackHighlightIndexRef.current[focusSectionId] ?? 0;
+                                    const pick = fallbackList[cursor % fallbackList.length];
+                                    fallbackHighlightIndexRef.current[focusSectionId] = (cursor + 1) % fallbackList.length;
+                                    if (pick) {
+                                        const snippet = textSource.slice(pick.start, pick.end).trim();
+                                        if (snippet) {
+                                            computeHighlightsForSection(
+                                                focusSectionId,
+                                                textSource,
+                                                [snippet],
+                                                intent,
+                                                { exclusive: true, tone: 'success' }
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    const microcard = buildAuroraMicrocard(intent, response.tutor_turn, sectionTitle);
+                    if (microcard) {
+                        pushAuroraMicrocard(focusSectionId, microcard);
+                        if (microcard.tone === 'practice') {
+                            setExplainCountSincePractice(0);
+                        }
+                        markCueDismissed(sectionIntroCueId(focusSectionId));
+                        setAuroraCue((prev) => (prev && prev.id === sectionIntroCueId(focusSectionId) ? null : prev));
+                    }
+                }
+            } catch (err) {
+                const message = err instanceof Error ? err.message : 'AI assistant could not respond.';
+                setAiStatus('error');
+                setAiError(message);
+                setAiProcessingSectionId(null);
+                console.error('[StudySessionScreen] AI response error:', message);
+            }
+        },
+        [activeSectionId, buildAuroraMicrocard, computeHighlightsForSection, ensureAiSession, getSectionPlainText, markCueDismissed, pushAuroraMicrocard, sections, token, updateAiState]
+    );
+
+    // Submit a checkpoint artifact (photo) when AI requests a quick exercise
+    const handleSubmitCheckpoint = useCallback(async () => {
+        if (!aiState?.session?.session_id || !token) return;
+        // Prefer camera; fallback to library if permission denied
+        try {
+            const camPerm = await ImagePicker.requestCameraPermissionsAsync();
+            if (camPerm.status !== 'granted') {
+                const libPerm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+                if (libPerm.status !== 'granted') {
+                    Alert.alert('Permission needed', 'Camera or photo library permission is required.');
+                    return;
+                }
+                const pick = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.7 });
+                if (pick.canceled || !pick.assets?.length) return;
+                const img = pick.assets[0];
+                setAiStatus('loading');
+                const cpRes = await aiTutorService.submitCheckpoint(token, aiState.session.session_id, {
+                    checkpoint_type: 'photo',
+                    file_uri: img.uri,
+                    file_name: img.fileName || `checkpoint-${Date.now()}.jpg`,
+                    mime_type: img.mimeType || 'image/jpeg',
+                });
+                const refreshed = await aiTutorService.getSession(token, aiState.session.session_id);
+                // Synthesize a tutor turn from AI feedback so UI shows results immediately
+                const strengths = (cpRes as any)?.ai_feedback?.strengths as string[] | undefined;
+                const improvements = (cpRes as any)?.ai_feedback?.improvements as string[] | undefined;
+                const score = (cpRes as any)?.score as number | undefined;
+                const needsReview = Boolean((cpRes as any)?.needs_review);
+                const feedbackSummary = (cpRes as any)?.ai_feedback?.summary || (cpRes as any)?.tutor_message || 'Thanks — I received your submission.';
+                const nextStep = (cpRes as any)?.ai_feedback?.suggested_next_step || (cpRes as any)?.next_steps?.[0];
+                const tutorTurn: TutorTurn = {
+                    turn_id: `checkpoint_feedback_${Date.now()}`,
+                    narration: feedbackSummary,
+                    summary: feedbackSummary,
+                    follow_up_prompts: ['Continue'],
+                    comprehension_check: null,
+                    checkpoint: needsReview ? (aiTurn?.checkpoint || { required: true, checkpoint_type: 'photo', instructions: 'Please resubmit with the requested changes.' }) : null,
+                    next_action: needsReview ? 'await_checkpoint' : 'continue',
+                };
+                const mergedSession = { ...refreshed.session, status: needsReview ? 'awaiting_checkpoint' as const : refreshed.session.status };
+                updateAiState({ session: mergedSession, tutor_turn: tutorTurn, interactions: refreshed.interactions });
+                // Also render a practice microcard with the feedback for the active section
+                const targetSectionId = aiFocusedSectionId || activeSection?.id || sections[0]?.id;
+                if (targetSectionId) {
+                    const sectionTitle = sections.find((s) => s.id === targetSectionId)?.title || 'this section';
+                    const lines: string[] = [];
+                    lines.push(feedbackSummary);
+                    if (Array.isArray(strengths) && strengths.length) {
+                        lines.push(`Strengths:\n• ${strengths.join('\n• ')}`);
+                    }
+                    if (Array.isArray(improvements) && improvements.length) {
+                        lines.push(`Improvements:\n• ${improvements.join('\n• ')}`);
+                    }
+                    const card: AuroraMicrocardData = {
+                        id: tutorTurn.turn_id,
+                        tone: 'practice',
+                        headline: 'Checkpoint Feedback',
+                        body: lines.join('\n\n'),
+                        footnote: typeof nextStep === 'string' ? nextStep : undefined,
+                        score: typeof score === 'number' ? score : undefined,
+                    };
+                    pushAuroraMicrocard(targetSectionId, card);
+                    setAuroraAnchorOpen(true);
+                }
+                setAiStatus('ready');
+                return;
+            }
+
+            const shot = await ImagePicker.launchCameraAsync({ quality: 0.7 });
+            if (shot.canceled || !shot.assets?.length) return;
+            const img = shot.assets[0];
+            setAiStatus('loading');
+            const cpRes = await aiTutorService.submitCheckpoint(token, aiState.session.session_id, {
+                checkpoint_type: 'photo',
+                file_uri: img.uri,
+                file_name: img.fileName || `checkpoint-${Date.now()}.jpg`,
+                mime_type: img.mimeType || 'image/jpeg',
+            });
+            const refreshed = await aiTutorService.getSession(token, aiState.session.session_id);
+            const strengths = (cpRes as any)?.ai_feedback?.strengths as string[] | undefined;
+            const improvements = (cpRes as any)?.ai_feedback?.improvements as string[] | undefined;
+            const score = (cpRes as any)?.score as number | undefined;
+            const needsReview = Boolean((cpRes as any)?.needs_review);
+            const feedbackSummary = (cpRes as any)?.ai_feedback?.summary || (cpRes as any)?.tutor_message || 'Thanks — I received your submission.';
+            const nextStep = (cpRes as any)?.ai_feedback?.suggested_next_step || (cpRes as any)?.next_steps?.[0];
+            const tutorTurn: TutorTurn = {
+                turn_id: `checkpoint_feedback_${Date.now()}`,
+                narration: feedbackSummary,
+                summary: feedbackSummary,
+                follow_up_prompts: ['Continue'],
+                comprehension_check: null,
+                checkpoint: needsReview ? (aiTurn?.checkpoint || { required: true, checkpoint_type: 'photo', instructions: 'Please resubmit with the requested changes.' }) : null,
+                next_action: needsReview ? 'await_checkpoint' : 'continue',
+            };
+            const mergedSession = { ...refreshed.session, status: needsReview ? 'awaiting_checkpoint' as const : refreshed.session.status };
+            updateAiState({ session: mergedSession, tutor_turn: tutorTurn, interactions: refreshed.interactions });
+            const targetSectionId = aiFocusedSectionId || activeSection?.id || sections[0]?.id;
+            if (targetSectionId) {
+                const lines: string[] = [];
+                lines.push(feedbackSummary);
+                if (Array.isArray(strengths) && strengths.length) {
+                    lines.push(`Strengths:\n• ${strengths.join('\n• ')}`);
+                }
+                if (Array.isArray(improvements) && improvements.length) {
+                    lines.push(`Improvements:\n• ${improvements.join('\n• ')}`);
+                }
+                const card: AuroraMicrocardData = {
+                    id: tutorTurn.turn_id,
+                    tone: 'practice',
+                    headline: 'Checkpoint Feedback',
+                    body: lines.join('\n\n'),
+                    footnote: typeof nextStep === 'string' ? nextStep : undefined,
+                    score: typeof score === 'number' ? score : undefined,
+                };
+                pushAuroraMicrocard(targetSectionId, card);
+                setAuroraAnchorOpen(true);
+            }
+            setAiStatus('ready');
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Failed to submit checkpoint.';
+            setAiStatus('error');
+            setAiError(msg);
+        }
+    }, [aiState?.session?.session_id, token, updateAiState, aiFocusedSectionId, activeSection?.id, sections, pushAuroraMicrocard]);
+
+    // Answer a True/False comprehension check directly from Aurora
+    const handleAnswerComprehension = useCallback(async (answer: 'true' | 'false') => {
+        const state = await ensureAiSession();
+        if (!state || !state.session?.session_id || !token) return;
+        try {
+            setAiStatus('loading');
+            setAuroraAnchorOpen(true);
+            const response = await aiTutorService.sendMessage(token, state.session.session_id, {
+                input_type: 'button',
+                message: answer,
+                metadata: { kind: 'comprehension', selection: answer },
+            });
+            updateAiState(response);
+            setAiStatus('ready');
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Failed to submit answer.';
+            setAiStatus('error');
+            setAiError(msg);
+        }
+    }, [ensureAiSession, token, updateAiState]);
+
+    // Submit reflection notes for a reflection-type checkpoint
+    const handleSubmitReflectionNotes = useCallback(async (notes: string) => {
+        if (!aiState?.session?.session_id || !token) return;
+        try {
+            setAiStatus('loading');
+            const cpRes = await aiTutorService.submitCheckpoint(token, aiState.session.session_id, {
+                checkpoint_type: 'reflection',
+                notes,
+            });
+            const refreshed = await aiTutorService.getSession(token, aiState.session.session_id);
+            const strengths = (cpRes as any)?.ai_feedback?.strengths as string[] | undefined;
+            const improvements = (cpRes as any)?.ai_feedback?.improvements as string[] | undefined;
+            const score = (cpRes as any)?.score as number | undefined;
+            const needsReview = Boolean((cpRes as any)?.needs_review);
+            const feedbackSummary = (cpRes as any)?.ai_feedback?.summary || (cpRes as any)?.tutor_message || 'Thanks — I received your reflection.';
+            const nextStep = (cpRes as any)?.ai_feedback?.suggested_next_step || (cpRes as any)?.next_steps?.[0];
+            const tutorTurn: TutorTurn = {
+                turn_id: `checkpoint_feedback_${Date.now()}`,
+                narration: feedbackSummary,
+                summary: feedbackSummary,
+                follow_up_prompts: ['Continue'],
+                comprehension_check: null,
+                checkpoint: needsReview ? (aiTurn?.checkpoint || { required: true, checkpoint_type: 'reflection', instructions: 'Please refine and resubmit your reflection.' }) : null,
+                next_action: needsReview ? 'await_checkpoint' : 'continue',
+            };
+            const mergedSession = { ...refreshed.session, status: needsReview ? 'awaiting_checkpoint' as const : refreshed.session.status };
+            updateAiState({ session: mergedSession, tutor_turn: tutorTurn, interactions: refreshed.interactions });
+            const targetSectionId = aiFocusedSectionId || activeSection?.id || sections[0]?.id;
+            if (targetSectionId) {
+                const sectionTitle = sections.find((s) => s.id === targetSectionId)?.title || 'this section';
+                const lines: string[] = [];
+                lines.push(feedbackSummary);
+                if (Array.isArray(strengths) && strengths.length) {
+                    lines.push(`Strengths:\n• ${strengths.join('\n• ')}`);
+                }
+                if (Array.isArray(improvements) && improvements.length) {
+                    lines.push(`Improvements:\n• ${improvements.join('\n• ')}`);
+                }
+                const card: AuroraMicrocardData = {
+                    id: tutorTurn.turn_id,
+                    tone: 'practice',
+                    headline: 'Checkpoint Feedback',
+                    body: lines.join('\n\n'),
+                    footnote: typeof nextStep === 'string' ? nextStep : undefined,
+                    score: typeof score === 'number' ? score : undefined,
+                };
+                pushAuroraMicrocard(targetSectionId, card);
+                setAuroraAnchorOpen(true);
+            }
+            setAiStatus('ready');
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Failed to submit reflection.';
+            setAiStatus('error');
+            setAiError(msg);
+        }
+    }, [aiState?.session?.session_id, token, updateAiState, aiFocusedSectionId, activeSection?.id, sections, pushAuroraMicrocard]);
+
+    // Submit quiz answers as notes (non-multiple-choice quizzes)
+    const handleSubmitQuizNotes = useCallback(async (notes: string) => {
+        if (!aiState?.session?.session_id || !token) return;
+        try {
+            setAiStatus('loading');
+            const cpRes = await aiTutorService.submitCheckpoint(token, aiState.session.session_id, {
+                checkpoint_type: 'quiz',
+                notes,
+            });
+            const refreshed = await aiTutorService.getSession(token, aiState.session.session_id);
+            const strengths = (cpRes as any)?.ai_feedback?.strengths as string[] | undefined;
+            const improvements = (cpRes as any)?.ai_feedback?.improvements as string[] | undefined;
+            const score = (cpRes as any)?.score as number | undefined;
+            const needsReview = Boolean((cpRes as any)?.needs_review);
+            const feedbackSummary = (cpRes as any)?.ai_feedback?.summary || (cpRes as any)?.tutor_message || 'Thanks — I received your answers.';
+            const nextStep = (cpRes as any)?.ai_feedback?.suggested_next_step || (cpRes as any)?.next_steps?.[0];
+            const tutorTurn: TutorTurn = {
+                turn_id: `checkpoint_feedback_${Date.now()}`,
+                narration: feedbackSummary,
+                summary: feedbackSummary,
+                follow_up_prompts: ['Continue'],
+                comprehension_check: null,
+                checkpoint: needsReview ? (aiTurn?.checkpoint || { required: true, checkpoint_type: 'quiz', instructions: 'Please refine your answers and resubmit.' }) : null,
+                next_action: needsReview ? 'await_checkpoint' : 'continue',
+            };
+            const mergedSession = { ...refreshed.session, status: needsReview ? 'awaiting_checkpoint' as const : refreshed.session.status };
+            updateAiState({ session: mergedSession, tutor_turn: tutorTurn, interactions: refreshed.interactions });
+            const targetSectionId = aiFocusedSectionId || activeSection?.id || sections[0]?.id;
+            if (targetSectionId) {
+                const lines: string[] = [];
+                lines.push(feedbackSummary);
+                if (Array.isArray(strengths) && strengths.length) lines.push(`Strengths:\n• ${strengths.join('\n• ')}`);
+                if (Array.isArray(improvements) && improvements.length) lines.push(`Improvements:\n• ${improvements.join('\n• ')}`);
+                const card: AuroraMicrocardData = {
+                    id: tutorTurn.turn_id,
+                    tone: 'practice',
+                    headline: 'Checkpoint Feedback',
+                    body: lines.join('\n\n'),
+                    footnote: typeof nextStep === 'string' ? nextStep : undefined,
+                    score: typeof score === 'number' ? score : undefined,
+                };
+                pushAuroraMicrocard(targetSectionId, card);
+                setAuroraAnchorOpen(true);
+            }
+            setAiStatus('ready');
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Failed to submit quiz notes.';
+            setAiStatus('error');
+            setAiError(msg);
+        }
+    }, [aiState?.session?.session_id, token, updateAiState, aiFocusedSectionId, activeSection?.id, sections, pushAuroraMicrocard]);
+
+    // Freeform answer to comprehension questions
+    const handleAnswerFreeform = useCallback(async (answer: string) => {
+        const state = await ensureAiSession();
+        if (!state || !state.session?.session_id || !token) return;
+        try {
+            setAiStatus('loading');
+            setAuroraAnchorOpen(true);
+            const response = await aiTutorService.sendMessage(token, state.session.session_id, {
+                input_type: 'text',
+                message: answer,
+                metadata: { kind: 'comprehension', mode: 'freeform' },
+            });
+            updateAiState(response);
+            setAiStatus('ready');
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Failed to submit answer.';
+            setAiStatus('error');
+            setAiError(msg);
+        }
+    }, [ensureAiSession, token, updateAiState]);
+
+
+    // ============================================
+    // AURORA AI MODE - Clean Fresh Implementation
+    // ============================================
+    
+    const [walkIndex, setWalkIndex] = useState<number>(0);
+    const [walkSectionId, setWalkSectionId] = useState<string | null>(null);
+    const [walkthroughRecapPrompt, setWalkthroughRecapPrompt] = useState<{
+        sectionId: string;
+        prompt: string;
+        label: string;
+    } | null>(null);
+
+    // Clean walkthrough data structure
+    const walkDataRef = useRef<{
+        sectionId: string;
+        snippets: string[];
+        explanations: TutorTurn[];
+    } | null>(null);
+
+    const queueWalkthroughRecap = useCallback(
+        (sectionId: string) => {
+            const sectionTitle = sections.find((item) => item.id === sectionId)?.title || 'this section';
+            setWalkthroughRecapPrompt({
+                sectionId,
+                prompt: `Give me a quick recap of ${sectionTitle}`,
+                label: `Recap ${sectionTitle}`,
+            });
+        },
+        [sections],
+    );
+
+    /**
+     * Generate explanations for all snippets in sequence.
+     * Stores results as we go, displaying first explanation immediately.
+     */
+    const preComputeExplanations = useCallback(
+        async (sectionId: string, snippets: string[], state: TutorSessionState) => {
+            console.log(`[Aurora] Pre-computing explanations for ${snippets.length} snippets...`);
+            
+            const explanations: TutorTurn[] = [];
+
+            for (let i = 0; i < snippets.length; i++) {
+                try {
+                    const snippet = snippets[i];
+                    const prompt = `Explain this concisely: "${snippet}". Keep it brief and engaging.`;
+                    
+                    const response = await aiTutorService.sendMessage(token!, state.session.session_id, {
+                        input_type: 'text',
+                        message: prompt,
+                    });
+
+                    if (response.tutor_turn) {
+                        explanations.push(response.tutor_turn);
+                        
+                        // If first explanation, display immediately
+                        if (i === 0 && walkSectionId === sectionId) {
+                            updateAiState({
+                                session: response.session,
+                                tutor_turn: response.tutor_turn,
+                                interactions: response.interactions,
+                            });
+                        }
+                        console.log(`[Aurora] Step ${i + 1}/${snippets.length} cached`);
+                    }
+                } catch (err) {
+                    console.warn(`[Aurora] Failed to get explanation for snippet ${i}:`, err);
+                    explanations.push(null as any);
+                }
+            }
+
+            // Store all explanations
+            if (walkDataRef.current) {
+                walkDataRef.current.explanations = explanations;
+                console.log(`[Aurora] Pre-compute complete with ${explanations.filter(Boolean).length}/${snippets.length} explanations`);
+            }
+        },
+        [token, walkSectionId, updateAiState],
+    );
+
+    const resetWalkthrough = useCallback(() => {
+        walkDataRef.current = null;
+        setWalkSectionId(null);
+        setWalkIndex(0);
+        setWalkthroughRecapPrompt(null);
+        console.log('[Aurora] Walkthrough reset');
+    }, []);
+
+    const handleStartExplainWalkthrough = useCallback(
+        (sectionId: string) => {
+            console.log(`[Aurora] Starting explain for section: ${sectionId}`);
+            const text = getSectionPlainText(sectionId);
+            
+            if (!text) {
+                // Fallback to normal explain
+                requestAiResponse('explain', sectionId);
+                return;
+            }
+
+            // Prefer pre-generated lesson plan snippets when available
+            let snippets: string[] = [];
+            try {
+                if (lessonPlan && aiSessionSnapshot) {
+                    const seg = (lessonPlan.segments || []).find(s => s.index === aiSessionSnapshot.current_segment_index);
+                    if (seg && Array.isArray(seg.snippets) && seg.snippets.length) {
+                        snippets = seg.snippets.map(sn => (sn.snippet || '').trim()).filter(Boolean);
+                    }
+                }
+            } catch (e) {
+                // ignore and fallback to heuristic extraction
+            }
+
+            if (!snippets.length) {
+                // Extract 3-5 key snippets from text heuristically
+                const ranges = computeHighlightRanges(text, [], { maxHighlights: 5, preferredLength: 110 });
+                snippets = ranges
+                    .map((r) => text.slice(r.start, r.end).trim())
+                    .filter((s) => s.length > 0);
+            }
+
+            if (snippets.length < 2) {
+                // Not enough for walkthrough, use normal explain
+                requestAiResponse('explain', sectionId);
+                return;
+            }
+
+            console.log(`[Aurora] Walkthrough with ${snippets.length} snippets`);
+
+            // Setup walkthrough
+            walkDataRef.current = { sectionId, snippets, explanations: [] };
+            setWalkSectionId(sectionId);
+            setWalkIndex(0);
+            setAutoAdvanceEnabled(false);
+
+            // Ghost highlights + current
+            setGhostHighlights(sectionId, text, snippets, 0);
+
+            // Start explaining (will pre-compute rest in background)
+            setAiStatus('loading');
+            ensureAiSession().then((state) => {
+                if (!state) {
+                    setAiStatus('error');
+                    return;
+                }
+
+                setAiStatus('ready');
+                preComputeExplanations(sectionId, snippets, state);
+            });
+        },
+        [
+            getSectionPlainText,
+            computeHighlightRanges,
+            computeHighlightsForSection,
+            requestAiResponse,
+            ensureAiSession,
+            preComputeExplanations,
+        ]
+    );
+
+    const handleWalkNext = useCallback(() => {
+        if (!walkDataRef.current || !walkSectionId) return;
+
+        const { snippets, explanations } = walkDataRef.current;
+        const nextIdx = walkIndex + 1;
+
+        // Check if done
+        if (nextIdx >= snippets.length) {
+            console.log('[Aurora] Walkthrough complete');
+            resetWalkthrough();
+            setAutoAdvanceEnabled(true);
+            queueWalkthroughRecap(walkSectionId);
+            return;
+        }
+
+        // Update highlight
+    const text = getSectionPlainText(walkSectionId);
+    setGhostHighlights(walkSectionId, text, snippets, nextIdx);
+        setWalkIndex(nextIdx);
+
+        // Show cached explanation or request
+        const cachedExplanation = explanations[nextIdx];
+        if (cachedExplanation) {
+            updateAiState({
+                session: aiState!.session,
+                tutor_turn: cachedExplanation,
+                interactions: aiState!.interactions,
+            });
+        } else {
+            console.log(`[Aurora] Requesting explanation for step ${nextIdx + 1}`);
+            requestAiResponse('explain', walkSectionId, `Explain this part: ${snippets[nextIdx]}`, {
+                skipHighlightUpdate: true,
+                highlightSnippet: snippets[nextIdx],
+                exclusiveHighlight: true,
+            });
+        }
+    }, [walkIndex, walkSectionId, getSectionPlainText, computeHighlightsForSection, updateAiState, aiState, requestAiResponse, resetWalkthrough, setAutoAdvanceEnabled, queueWalkthroughRecap]);
+
+    const handleWalkPrev = useCallback(() => {
+        if (!walkDataRef.current || !walkSectionId || walkIndex <= 0) return;
+
+        const { snippets, explanations } = walkDataRef.current;
+        const prevIdx = walkIndex - 1;
+
+        // Update highlight
+    const text = getSectionPlainText(walkSectionId);
+    setGhostHighlights(walkSectionId, text, snippets, prevIdx);
+        setWalkIndex(prevIdx);
+
+        // Show cached explanation
+        const cachedExplanation = explanations[prevIdx];
+        if (cachedExplanation) {
+            updateAiState({
+                session: aiState!.session,
+                tutor_turn: cachedExplanation,
+                interactions: aiState!.interactions,
+            });
+        }
+    }, [walkIndex, walkSectionId, getSectionPlainText, computeHighlightsForSection, updateAiState, aiState]);
+
+    const currentWalkStepLabel = useMemo(() => {
+        if (!walkSectionId || !walkDataRef.current) return undefined;
+        const { snippets } = walkDataRef.current;
+        return `Step ${Math.min(walkIndex + 1, snippets.length)} of ${snippets.length}`;
+    }, [walkSectionId, walkIndex]);
+
+    const walkthroughLoading = useMemo(() => {
+        return !!(walkSectionId && aiStatus === 'loading');
+    }, [walkSectionId, aiStatus]);
+
+    const handleAiQuizSection = useCallback(
+        (sectionId: string) => {
+            requestAiResponse('quiz', sectionId);
+        },
+        [requestAiResponse]
+    );
+
+    const handleAiContextSection = useCallback(
+        (sectionId: string) => {
+            requestAiResponse('context', sectionId);
+        },
+        [requestAiResponse]
+    );
+
+    const handleAiSuggestion = useCallback(
+        (suggestion: string) => {
+            if (!suggestion) return;
+
+            const normalized = suggestion.toLowerCase();
+
+            // Route 'continue' to walkthrough when active
+            if (normalized.includes('continue') && walkSectionId) {
+                handleWalkNext();
+                return;
+            }
+
+            // If the suggestion is to explain the current section, start guided walkthrough
+            if (activeSection) {
+                const explainPhrases = [
+                    'explain',
+                    `explain ${activeSection.title.toLowerCase()}`,
+                    'explain block content',
+                    'explain this',
+                ];
+                if (explainPhrases.some((p) => normalized.includes(p))) {
+                    setAuroraAnchorOpen(true);
+                    handleStartExplainWalkthrough(activeSection.id);
+                    return;
+                }
+            }
+
+            if (normalized.includes('quick exercise') || normalized.includes('practice question')) {
+                const targetSection = aiFocusedSectionId || activeSection?.id || sections[0]?.id;
+                if (targetSection) {
+                    setAuroraAnchorOpen(true);
+                    markCueDismissed(practiceCueId(targetSection));
+                    requestAiResponse('quiz', targetSection);
+                }
+                return;
+            }
+
+            if (nextSection) {
+                const nextTitle = nextSection.title.toLowerCase();
+                const wantsNext =
+                    normalized.includes('continue') ||
+                    normalized.includes('next') ||
+                    normalized.includes('go to');
+                if (wantsNext && normalized.includes(nextTitle)) {
+                    markCueDismissed(nextSectionCueId(activeSection?.id || nextSection.id));
+                    setActiveSectionId(nextSection.id);
+                    setAiFocusedSectionId(nextSection.id);
+                    setAuroraCue(null);
+                    setAuroraAnchorOpen(true);
+                    requestAiResponse('explain', nextSection.id);
+                    return;
+                }
+            }
+
+            setAuroraAnchorOpen(true);
+            const targetSection = aiFocusedSectionId || activeSection?.id || sections[0]?.id;
+            requestAiResponse('custom', targetSection, suggestion);
+        },
+        [activeSection, aiFocusedSectionId, markCueDismissed, nextSection, requestAiResponse, sections, walkSectionId, handleStartExplainWalkthrough, handleWalkNext]
+    );
+
+    const handleCuePrompt = useCallback((prompt: string) => {
+        if (auroraCue?.id) {
+            markCueDismissed(auroraCue.id);
+        }
+        setAuroraCue(null);
+        handleAiSuggestion(prompt);
+    }, [auroraCue, handleAiSuggestion, markCueDismissed]);
+
+    const handleWalkthroughRecap = useCallback(() => {
+        if (!walkthroughRecapPrompt) return;
+        const { sectionId, prompt } = walkthroughRecapPrompt;
+        setWalkthroughRecapPrompt(null);
+        setAuroraAnchorOpen(true);
+        requestAiResponse('custom', sectionId, prompt);
+    }, [requestAiResponse, setAuroraAnchorOpen, walkthroughRecapPrompt]);
+
+    const renderAiToolbar = useCallback(
+        (section?: StudySection | null) => {
+            if (!auroraEnabled || !section) return null;
+            const isProcessing = aiStatus === 'loading' && aiProcessingSectionId === section.id;
+            return (
+                <View style={styles.aiToolbar}>
+                    <View style={styles.aiToolbarHeader}>
+                        <Text style={styles.aiToolbarTitle}>Aurora actions</Text>
+                        {isProcessing ? <ActivityIndicator size="small" color="#1D4ED8" /> : null}
+                    </View>
+                    <View style={styles.aiToolbarRow}>
+                        <TouchableOpacity
+                            style={[
+                                styles.aiPill,
+                                isProcessing && styles.aiPillDisabled,
+                            ]}
+                            onPress={() => handleStartExplainWalkthrough(section.id)}
+                            disabled={isProcessing}
+                        >
+                            <Text style={styles.aiPillText}>Explain</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[
+                                styles.aiPill,
+                                isProcessing && styles.aiPillDisabled,
+                            ]}
+                            onPress={() => handleAiQuizSection(section.id)}
+                            disabled={isProcessing}
+                        >
+                            <Text style={styles.aiPillText}>Quick quiz</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[
+                                styles.aiPill,
+                                isProcessing && styles.aiPillDisabled,
+                            ]}
+                            onPress={() => handleAiContextSection(section.id)}
+                            disabled={isProcessing}
+                        >
+                            <Text style={styles.aiPillText}>Context</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            );
+        },
+        [aiProcessingSectionId, aiStatus, auroraEnabled, handleAiContextSection, handleStartExplainWalkthrough, handleAiQuizSection]
+    );
+
+    useEffect(() => {
+        if (!auroraEnabled) return;
+        if (!activeSectionId) return;
+        if (aiFocusedSectionId === activeSectionId) return;
+        setAiFocusedSectionId(activeSectionId);
+    }, [activeSectionId, aiFocusedSectionId, auroraEnabled]);
+
+    useEffect(() => {
+        if (!auroraEnabled) return;
+        if (!aiFocusedSectionId) return;
+        if (walkSectionId && walkSectionId === aiFocusedSectionId) return;
+        const text = getSectionPlainText(aiFocusedSectionId);
+        if (!text) return;
+        const hints: string[] = [];
+        if (aiTurn?.summary) hints.push(aiTurn.summary);
+        if (aiTurn?.narration) hints.push(aiTurn.narration);
+        computeHighlightsForSection(aiFocusedSectionId, text, hints);
+    }, [auroraEnabled, aiFocusedSectionId, aiTurn, computeHighlightsForSection, getSectionPlainText, walkSectionId]);
+
+    useEffect(() => {
+        if (!auroraEnabled || !activeSection) {
+            if (auroraCue) {
+                setAuroraCue(null);
+            }
+            return;
+        }
+
+        const cards = auroraMicrocards[activeSection.id] ?? [];
+        const hasPracticeCard = cards.some((card) => card.tone === 'practice');
+
+        const candidates: AuroraCueData[] = [];
+
+        if (explainCountSincePractice >= 2 && !hasPracticeCard) {
+            candidates.push({
+                id: practiceCueId(activeSection.id),
+                title: 'Ready to practice?',
+                message: 'Try a quick exercise to make sure it sticks.',
+                prompts: ['Give me a quick exercise'],
+                variant: 'spark',
+            });
+        }
+
+        if (nextSection && cards.length > 0) {
+            candidates.push({
+                id: nextSectionCueId(activeSection.id),
+                title: 'Next up',
+                message: `Aurora can guide you into “${nextSection.title}”. Ready to continue?`,
+                prompts: [`Continue to ${nextSection.title}`],
+                variant: 'spark',
+            });
+        }
+
+        if (cards.length === 0) {
+            candidates.push({
+                id: sectionIntroCueId(activeSection.id),
+                title: 'Aurora is ready',
+                message: `Highlight something in “${activeSection.title}” and Aurora will explain, quiz, or connect the dots.`,
+                prompts: [
+                    `Explain ${activeSection.title}`,
+                    `Quiz me on ${activeSection.title}`,
+                    'Give me a real-world example',
+                ],
+                variant: 'spark',
+            });
+        }
+
+        const nextCue = candidates.find((cue) => !dismissedCueIdsRef.current.has(cue.id));
+
+        if (!nextCue) {
+            if (auroraCue) {
+                setAuroraCue(null);
+            }
+            return;
+        }
+
+        setAuroraCue((prev) => {
+            if (prev && prev.id === nextCue.id && prev.message === nextCue.message) {
+                return prev;
+            }
+            return nextCue;
+        });
+    }, [activeSection, auroraCue, auroraEnabled, auroraMicrocards, explainCountSincePractice, nextSection]);
+
+    useEffect(() => {
+        if (!auroraEnabled) return;
+        if (!aiTurn) return;
+        if (!aiTurn.comprehension_check) return;
+
+        const targetSectionId = aiFocusedSectionId || activeSection?.id || sections[0]?.id;
+        if (!targetSectionId) return;
+        if (lastPracticeTurnIdRef.current === aiTurn.turn_id) return;
+
+        const sectionTitle = sections.find((section) => section.id === targetSectionId)?.title || 'This section';
+        const card = buildAuroraMicrocard('quiz', aiTurn, sectionTitle);
+        if (!card) return;
+
+        lastPracticeTurnIdRef.current = aiTurn.turn_id;
+        pushAuroraMicrocard(targetSectionId, card);
+        markCueDismissed(practiceCueId(targetSectionId));
+        setAuroraCue((prev) => (prev && prev.id === practiceCueId(targetSectionId) ? null : prev));
+        setAuroraAnchorOpen(true);
+    }, [activeSection?.id, aiFocusedSectionId, aiTurn, auroraEnabled, buildAuroraMicrocard, markCueDismissed, pushAuroraMicrocard, sections]);
+
+    useEffect(() => {
+    if (!auroraEnabled) return;
+    if (!autoAdvanceEnabled) return;
+    if (!aiTurn) return;
+        if (aiTurn.next_action !== 'continue') return;
+        if (!nextSection) return;
+        if (lastAutoContinueTurnIdRef.current === aiTurn.turn_id) return;
+
+        lastAutoContinueTurnIdRef.current = aiTurn.turn_id;
+        const nextId = nextSection.id;
+        markCueDismissed(nextSectionCueId(activeSection?.id || nextId));
+        setAuroraCue(null);
+        setActiveSectionId(nextId);
+        setAiFocusedSectionId(nextId);
+        setAuroraAnchorOpen(true);
+        requestAiResponse('explain', nextId);
+    }, [activeSection?.id, aiTurn, auroraEnabled, markCueDismissed, nextSection, requestAiResponse]);
 
     useEffect(() => {
         if (sections.length === 0) {
@@ -769,6 +2293,23 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                         <Text style={styles.controlButtonText}>Mark as Done</Text>
                     )}
                 </TouchableOpacity>
+                <TouchableOpacity
+                    style={[
+                        styles.controlButton,
+                        styles.aiModeButton,
+                        auroraEnabled && styles.aiModeButtonActive,
+                    ]}
+                    onPress={handleToggleAiAssist}
+                    disabled={aiStatus === 'loading'}
+                >
+                    {aiStatus === 'loading' ? (
+                        <ActivityIndicator color="#fff" size="small" />
+                    ) : (
+                        <Text style={styles.controlButtonText}>
+                            {auroraEnabled ? 'Aurora On' : 'Enable Aurora'}
+                        </Text>
+                    )}
+                </TouchableOpacity>
             </View>
 
             {/* Workflow Integration */}
@@ -819,11 +2360,10 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
             );
         }
 
-        const activeSection =
-            sections.find(section => section.id === activeSectionId) ?? sections[0];
-        const currentIndex = sections.findIndex(section => section.id === activeSection.id);
-        const previousSection = currentIndex > 0 ? sections[currentIndex - 1] : null;
-        const nextSection = currentIndex < sections.length - 1 ? sections[currentIndex + 1] : null;
+        if (!activeSection) {
+            return null;
+        }
+        const currentIndex = currentSectionIndex >= 0 ? currentSectionIndex : 0;
 
         return (
             <ScrollView
@@ -841,6 +2381,14 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                     </Text>
                 </View>
                 {activeSection.content}
+                {(auroraMicrocards[activeSection.id] || []).map((card) => (
+                    <AuroraMicrocard
+                        key={card.id}
+                        {...card}
+                        onPromptPress={handleAiSuggestion}
+                    />
+                ))}
+                {renderAiToolbar(activeSection)}
                 <View style={styles.sectionPagerControls}>
                     {previousSection ? (
                         <TouchableOpacity
@@ -940,6 +2488,43 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
             {renderSessionHeader()}
             {renderContentBody()}
             {renderSessionFooter()}
+            <AuroraGuide
+                enabled={auroraEnabled}
+                anchorOpen={auroraAnchorOpen}
+                status={aiStatus}
+                title="Aurora Guide"
+                summary={auroraSummary}
+                message={auroraDisplayState.showNarration ? auroraMessage : undefined}
+                comprehensionCheck={auroraDisplayState.showQuestion ? (typeof aiTurn?.comprehension_check === 'string' ? aiTurn.comprehension_check : null) : undefined}
+                checkpoint={(auroraDisplayState.showCheckpoint && (!walkSectionId || (Math.max(0, walkIndex) % 2 === 1))) ? aiTurn?.checkpoint : undefined}
+                suggestions={auroraDisplayState.showSuggestions ? auroraSuggestions : undefined}
+                cue={auroraCue}
+                walkthroughActive={!!walkSectionId}
+                walkthroughLoading={walkthroughLoading}
+                walkStepLabel={currentWalkStepLabel}
+                onWalkNext={walkSectionId ? handleWalkNext : undefined}
+                onWalkPrev={walkSectionId && walkIndex > 0 ? handleWalkPrev : undefined}
+                postWalkthroughActionLabel={
+                    auroraDisplayState.showCheckpoint && (aiTurn?.checkpoint?.checkpoint_type === 'photo' || !aiTurn?.checkpoint?.checkpoint_type)
+                        ? 'Submit photo'
+                        : walkthroughRecapPrompt?.label
+                }
+                postWalkthroughActionDisabled={aiStatus === 'loading'}
+                onToggleAnchor={handleToggleAuroraAnchor}
+                onSuggestionPress={handleAiSuggestion}
+                onCuePromptPress={handleCuePrompt}
+                onDismissCue={handleDismissCue}
+                onPostWalkthroughAction={
+                    auroraDisplayState.showCheckpoint && (aiTurn?.checkpoint?.checkpoint_type === 'photo' || !aiTurn?.checkpoint?.checkpoint_type)
+                        ? handleSubmitCheckpoint
+                        : (walkthroughRecapPrompt ? handleWalkthroughRecap : undefined)
+                }
+                onAnswerComprehension={handleAnswerComprehension}
+                onAnswerFreeform={handleAnswerFreeform}
+                onSubmitReflection={handleSubmitReflectionNotes}
+                onSubmitQuizNotes={handleSubmitQuizNotes}
+                onSubmitPhotoCheckpoint={handleSubmitCheckpoint}
+            />
         </SafeAreaView>
     );
 };
@@ -1146,6 +2731,13 @@ const styles = StyleSheet.create({
     completeButton: {
         backgroundColor: '#28a745',
     },
+    aiModeButton: {
+        backgroundColor: '#2563EB',
+        marginLeft: 6,
+    },
+    aiModeButtonActive: {
+        backgroundColor: '#1E40AF',
+    },
     controlButtonText: {
         fontSize: 12,
         fontWeight: '600',
@@ -1203,6 +2795,53 @@ const styles = StyleSheet.create({
         fontSize: 16,
         color: '#333',
         lineHeight: 24,
+    },
+    aiToolbar: {
+        marginTop: 16,
+        marginBottom: 4,
+        backgroundColor: '#EEF2FF',
+        borderRadius: 18,
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: 'rgba(129, 140, 248, 0.35)',
+    },
+    aiToolbarHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 10,
+    },
+    aiToolbarTitle: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#312E81',
+        letterSpacing: 0.6,
+        textTransform: 'uppercase',
+    },
+    aiToolbarRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+    },
+    aiPill: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 7,
+        paddingHorizontal: 13,
+        backgroundColor: 'rgba(79, 70, 229, 0.14)',
+        borderRadius: 18,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: 'rgba(79, 70, 229, 0.32)',
+        marginRight: 8,
+        marginBottom: 8,
+    },
+    aiPillDisabled: {
+        opacity: 0.5,
+    },
+    aiPillText: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: '#1D4ED8',
     },
     noContentContainer: {
         alignItems: 'center',
