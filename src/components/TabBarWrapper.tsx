@@ -35,6 +35,7 @@ export const TabBarWrapper: React.FC<TabBarWrapperProps> = ({
             label: 'Courses',
             icon: 'library-outline',
             activeIcon: 'library',
+            // Take users to Browse screen by default so first-time users see all courses
             onPress: () => navigation.navigate('MyCourses'),
         },
         {
@@ -45,11 +46,11 @@ export const TabBarWrapper: React.FC<TabBarWrapperProps> = ({
             onPress: () => navigation.navigate('UploadsOverview'),
         },
         {
-            id: 'grades',
-            label: 'Grades',
-            icon: 'school-outline',
-            activeIcon: 'school',
-            onPress: () => navigation.navigate('GradesOverview'),
+            id: 'notes',
+            label: 'Notes',
+            icon: 'document-text-outline',
+            activeIcon: 'document-text',
+            onPress: () => navigation.navigate('NotesList'),
         },
         {
             id: 'profile',

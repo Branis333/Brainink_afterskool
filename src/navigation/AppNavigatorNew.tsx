@@ -3,6 +3,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAuth } from '../context/AuthContext';
 import { LoginScreen } from '../screens/LoginScreenNew';
+import { StartUpScreen } from '../screens/startUpScreen';
 
 
 // Course Management Screens
@@ -31,11 +32,25 @@ import { UploadsManagementScreen } from '../screens/uploads/UploadsManagementScr
 import { UploadProgressScreen } from '../screens/uploads/UploadProgressScreen';
 import { UploadHistoryScreen } from '../screens/uploads/UploadHistoryScreen';
 
+// Notes Management Screens
+import { NotesListScreen } from '../screens/notes/NotesListScreen';
+import { NoteDetailsScreen } from '../screens/notes/NoteDetailsScreen';
+import { UploadNoteScreen } from '../screens/notes/UploadNoteScreen';
+
+// Notifications Management Screens
+import {
+    NotificationsScreen,
+    NotificationDetailScreen,
+    NotificationSettingsScreen,
+} from '../screens/notifications';
+
 // Main Tab Container
 import { MainTabContainer } from '../components/MainTabContainer';
+import EditProfileScreen from '../screens/EditProfileScreen';
 
 export type RootStackParamList = {
     Login: undefined;
+    StartUp: undefined;
     MainTabs: undefined;
     // Course Management
     CourseHomepage: undefined;
@@ -63,6 +78,9 @@ export type RootStackParamList = {
         assignmentId?: number;
         assignmentTitle?: string;
         startWorkflow?: boolean;
+        // Optional focus to filter assignments by lesson/block
+        lessonId?: number;
+        blockId?: number;
     };
     CourseAssignment: {
         courseId: number;
@@ -70,6 +88,9 @@ export type RootStackParamList = {
         assignmentId?: number;
         assignmentTitle?: string;
         startWorkflow?: boolean;
+        // Optional focus to filter assignments by lesson/block
+        lessonId?: number;
+        blockId?: number;
     };
     CourseSearch: undefined;
     MyCourses: undefined;
@@ -103,6 +124,16 @@ export type RootStackParamList = {
     UploadsManagement: undefined;
     UploadProgress: undefined;
     UploadHistory: undefined;
+    // Notes Management
+    NotesList: undefined;
+    NoteDetails: { noteId: number };
+    UploadNote: undefined;
+    // Notifications Management
+    Notifications: undefined;
+    NotificationDetail: { notification: any };
+    NotificationSettings: undefined;
+    // Profile
+    EditProfile: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -123,6 +154,11 @@ export const AppNavigator: React.FC = () => {
                 }}
                 initialRouteName={getInitialRoute()}
             >
+                <Stack.Screen
+                    name="StartUp"
+                    component={StartUpScreen}
+                    options={{ gestureEnabled: true }}
+                />
                 <Stack.Screen
                     name="Login"
                     component={LoginScreen}
@@ -225,14 +261,64 @@ export const AppNavigator: React.FC = () => {
                     name="UploadHistory"
                     component={UploadHistoryScreen}
                 />
+
+                {/* Notes Management Screens */}
+                <Stack.Screen
+                    name="NotesList"
+                    component={NotesListScreen}
+                    options={{
+                        animation: 'slide_from_right',
+                        gestureEnabled: true,
+                    }}
+                />
+                <Stack.Screen
+                    name="NoteDetails"
+                    component={NoteDetailsScreen}
+                    options={{
+                        animation: 'slide_from_right',
+                        gestureEnabled: true,
+                    }}
+                />
+                <Stack.Screen
+                    name="UploadNote"
+                    component={UploadNoteScreen}
+                    options={{
+                        animation: 'slide_from_bottom',
+                        gestureEnabled: true,
+                        gestureDirection: 'vertical',
+                    }}
+                />
+
+                {/* Notifications Management Screens */}
+                <Stack.Screen
+                    name="Notifications"
+                    component={NotificationsScreen}
+                />
+                <Stack.Screen
+                    name="NotificationDetail"
+                    component={NotificationDetailScreen}
+                />
+                <Stack.Screen
+                    name="NotificationSettings"
+                    component={NotificationSettingsScreen}
+                />
+                {/* Profile */}
+                <Stack.Screen
+                    name="EditProfile"
+                    component={EditProfileScreen}
+                    options={{
+                        animation: 'slide_from_right',
+                        gestureEnabled: true,
+                    }}
+                />
             </Stack.Navigator>
         </NavigationContainer>
     );
 
     function getInitialRoute(): keyof RootStackParamList {
-        // If user is not logged in, go to login
+        // If user is not logged in, show StartUp screen first
         if (!user || !token) {
-            return 'Login';
+            return 'StartUp';
         }
 
         // If user is logged in, go to main tabs

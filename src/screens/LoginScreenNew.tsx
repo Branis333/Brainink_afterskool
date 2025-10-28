@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
     View,
     Text,
@@ -14,10 +14,13 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useRoute } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type LoginScreenProps = {
     navigation: NativeStackNavigationProp<any, 'Login'>;
+    // Route is optional to allow starting in Sign Up mode
+    route?: any;
 };
 
 // Get the correct backend URL based on environment
@@ -26,7 +29,9 @@ const getBackendUrl = () => {
     return 'https://brainink-backend.onrender.com';
 };
 
-export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
+export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, route }) => {
+    // Determine if we should start in Sign Up mode
+    const startInSignUp = route?.params?.startInSignUp === true;
     const [form, setForm] = useState({
         username: '',
         password: '',
@@ -34,7 +39,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
         fname: '',
         lname: '',
     });
-    const [isLogin, setIsLogin] = useState(true);
+    const [isLogin, setIsLogin] = useState(!startInSignUp);
     const [showPassword, setShowPassword] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState('');
@@ -74,6 +79,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation }) => {
                     lname: form.lname,
                 };
             }
+
+            // Persist a plain user profile for quick boot-time hydration
+            await AsyncStorage.setItem('user_profile', JSON.stringify(userData));
 
             await login(data.access_token, userData);
             navigation.navigate('CourseHomepage');
@@ -432,7 +440,7 @@ const styles = StyleSheet.create({
         padding: 12,
     },
     submitButton: {
-        backgroundColor: '#3B82F6',
+        backgroundColor: '#8B77F2',
         padding: 16,
         borderRadius: 8,
         alignItems: 'center',
@@ -451,7 +459,7 @@ const styles = StyleSheet.create({
         marginTop: 16,
     },
     switchText: {
-        color: '#3B82F6',
+        color: '#74a8faff',
         fontSize: 14,
         fontWeight: '500',
     },

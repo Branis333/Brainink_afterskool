@@ -52,6 +52,40 @@ class ProfileService {
         this.apiUrl = API_BASE_URL;
     }
 
+    /** Normalize various backend shapes to our User interface */
+    private normalizeUser(raw: any): User {
+        const email =
+            raw?.email ??
+            raw?.Email ??
+            raw?.email_address ??
+            raw?.user_email ??
+            '';
+        const username = raw?.username ?? raw?.user_name ?? raw?.user ?? '';
+        const id = raw?.id ?? raw?.user_id ?? 0;
+        const fname = raw?.fname ?? raw?.first_name ?? undefined;
+        const lname = raw?.lname ?? raw?.last_name ?? undefined;
+        const is_active = raw?.is_active ?? raw?.active ?? true;
+        const email_confirmed = raw?.email_confirmed ?? raw?.is_email_verified ?? false;
+        const is_verified = raw?.is_verified ?? raw?.verified ?? false;
+        const created_at = raw?.created_at ?? raw?.createdAt ?? new Date().toISOString();
+        const updated_at = raw?.updated_at ?? raw?.updatedAt ?? new Date().toISOString();
+        const last_login = raw?.last_login ?? raw?.lastLogin ?? undefined;
+
+        return {
+            id,
+            username,
+            email,
+            fname,
+            lname,
+            is_active,
+            email_confirmed,
+            is_verified,
+            created_at,
+            updated_at,
+            last_login,
+        };
+    }
+
     /**
      * Make authenticated request to API
      */
@@ -85,16 +119,10 @@ class ProfileService {
             const response = await this.makeAuthenticatedRequest('/me', token);
             const data = await response.json();
 
-            // Handle encrypted response if needed
-            if (data.encrypted_data) {
-                // If the response is encrypted, we need to decrypt it
-                // For now, we'll assume it's the user info directly
-                console.log('✅ User profile fetched successfully');
-                return data.encrypted_data.UserInfo || data;
-            }
-
+            const raw = data?.encrypted_data?.UserInfo ?? data;
+            const normalized = this.normalizeUser(raw);
             console.log('✅ User profile fetched successfully');
-            return data;
+            return normalized;
         } catch (error) {
             console.error('❌ Error fetching user profile:', error);
             throw error;
@@ -114,15 +142,10 @@ class ProfileService {
             });
 
             const data = await response.json();
-
-            // Handle encrypted response
-            if (data.encrypted_data) {
-                console.log('✅ Profile updated successfully');
-                return data.encrypted_data.UserInfo || data;
-            }
-
+            const raw = data?.encrypted_data?.UserInfo ?? data;
+            const normalized = this.normalizeUser(raw);
             console.log('✅ Profile updated successfully');
-            return data;
+            return normalized;
         } catch (error) {
             console.error('❌ Error updating profile:', error);
             throw error;

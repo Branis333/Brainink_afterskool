@@ -396,6 +396,13 @@ export interface AIGradingResponse {
     processed_at: string;
 }
 
+// Response for the simplified "one assignment" picker
+export interface OneAssignmentResponse {
+    assignment: CourseAssignment;
+    student_status?: AssignmentStatus | null;
+    is_assigned: boolean;
+}
+
 // Course Filtering Options
 export interface CourseFilters {
     subject?: string;
@@ -440,6 +447,7 @@ export type StudySessionMarkDoneResponse = StudySession;
 
 class AfterSchoolService {
     private dashboardInFlight: Promise<StudentDashboard> | null = null;
+    private dashboardInFlightKey: string | null = null;
     /**
      * Enhanced error handler with specific error types and user-friendly messages
      */
@@ -996,17 +1004,24 @@ class AfterSchoolService {
     /**
      * Get comprehensive student dashboard
      */
-    async getStudentDashboard(token: string): Promise<StudentDashboard> {
-        if (this.dashboardInFlight) {
+    async getStudentDashboard(
+        token: string,
+        options: { includeAllIfEmpty?: boolean; limit?: number; requireEnrolled?: boolean } = {}
+    ): Promise<StudentDashboard> {
+        const key = JSON.stringify({ includeAllIfEmpty: options.includeAllIfEmpty ?? false, limit: options.limit ?? 50, requireEnrolled: options.requireEnrolled ?? false });
+        if (this.dashboardInFlight && this.dashboardInFlightKey === key) {
             return this.dashboardInFlight; // Reuse existing call
         }
+        this.dashboardInFlightKey = key;
         this.dashboardInFlight = this.retryApiCall(async () => {
             try {
                 console.log('📊 Fetching student dashboard...');
-                const response = await this.makeAuthenticatedRequest(
-                    '/after-school/courses/dashboard',
-                    token
-                );
+                const params = new URLSearchParams();
+                if (options.limit !== undefined) {
+                    params.append('limit', String(options.limit));
+                }
+                const endpoint = `/after-school/courses/dashboard${params.toString() ? `?${params.toString()}` : ''}`;
+                const response = await this.makeAuthenticatedRequest(endpoint, token);
                 const data = await response.json();
                 console.log('✅ Student dashboard fetched successfully');
                 return data;
@@ -1014,9 +1029,28 @@ class AfterSchoolService {
                 throw this.handleApiError(error, 'Error fetching student dashboard');
             } finally {
                 this.dashboardInFlight = null;
+                this.dashboardInFlightKey = null;
             }
         });
         return this.dashboardInFlight;
+    }
+
+    /**
+     * Get 'My Courses' (enrolled-only) with progress summary
+     */
+    async getMyCourses(token: string): Promise<StudentDashboard> {
+        try {
+            console.log('📚 Fetching MY COURSES (enrolled only)...');
+            const response = await this.makeAuthenticatedRequest(
+                '/after-school/courses/my-courses',
+                token
+            );
+            const data = await response.json();
+            console.log('✅ My Courses fetched successfully');
+            return data;
+        } catch (error) {
+            throw this.handleApiError(error, 'Error fetching My Courses');
+        }
     }
 
     // ===============================
@@ -1621,6 +1655,31 @@ class AfterSchoolService {
 
         this.assignmentDefinitionsFetchInFlight.set(courseId, fetchPromise);
         return fetchPromise;
+    }
+
+    /**
+     * Get a single best assignment for quick navigation
+     * Backend: GET /after-school/assignments/one?course_id=...&block_id=...&lesson_id=...
+     */
+    async getOneAssignment(
+        courseId: number,
+        token: string,
+        opts: { block_id?: number; lesson_id?: number; prefer_status?: string } = {}
+    ): Promise<OneAssignmentResponse> {
+        try {
+            const params = new URLSearchParams();
+            params.append('course_id', courseId.toString());
+            if (opts.block_id) params.append('block_id', opts.block_id.toString());
+            if (opts.lesson_id) params.append('lesson_id', opts.lesson_id.toString());
+            if (opts.prefer_status) params.append('prefer_status', opts.prefer_status);
+
+            const endpoint = `/after-school/assignments/one?${params.toString()}`;
+            const response = await this.makeAuthenticatedRequest(endpoint, token);
+            const data = await response.json();
+            return data as OneAssignmentResponse;
+        } catch (error: any) {
+            throw this.handleApiError(error, 'Get One Assignment');
+        }
     }
 
     /**

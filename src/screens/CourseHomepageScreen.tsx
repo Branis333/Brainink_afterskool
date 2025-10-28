@@ -57,7 +57,8 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
                 throw new Error('No authentication token available');
             }
 
-            const dashboardData = await afterSchoolService.getStudentDashboard(token);
+            // For first-time users, request fallback list of all courses if none are enrolled
+            const dashboardData = await afterSchoolService.getStudentDashboard(token, { includeAllIfEmpty: true, limit: 50 });
             setDashboard(dashboardData);
             setLoadError(null);
         } catch (error) {
@@ -230,7 +231,7 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
                     </TouchableOpacity>
                     <TouchableOpacity
                         style={styles.iconButton}
-                        onPress={() => navigation.navigate('GradesOverview')}
+                        onPress={() => navigation.navigate('Notifications')}
                     >
                         <Ionicons name="notifications-outline" size={22} color="#FFFFFF" />
                     </TouchableOpacity>
@@ -658,7 +659,7 @@ const styles = StyleSheet.create({
 
     // Header Styles
     headerContainer: {
-        backgroundColor: '#7B68EE',
+        backgroundColor: 'rgba(108, 71, 255, 0.62)',
         borderTopLeftRadius: 30,
         borderTopRightRadius: 30,
         borderBottomLeftRadius: 30,

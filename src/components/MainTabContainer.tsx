@@ -20,7 +20,7 @@ import { useFocusEffect } from '@react-navigation/native';
 // Import all main screens
 import { CourseHomepageScreen } from '../screens/CourseHomepageScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
-import { CourseSearchScreen } from '../screens/course/CourseSearchScreen';
+// import { SearchScreen } from '../screens/course/CourseSearchScreen';
 import { MyCoursesScreen } from '../screens/course/MyCourses';
 import { UploadsOverviewScreen } from '../screens/uploads/UploadsOverviewScreen';
 import { GradesOverviewScreen } from '../screens/grades/GradesOverviewScreen';
@@ -28,10 +28,11 @@ import { GradesOverviewScreen } from '../screens/grades/GradesOverviewScreen';
 // Import navigation components
 import { BottomTabs, TabItem } from '../components/BottomTabs';
 import { useAuth } from '../context/AuthContext';
+import { NotesListScreen } from '../screens/notes/NotesListScreen';
 
 type NavigationProp = NativeStackNavigationProp<any>;
 
-export type TabScreens = 'home' | 'courses' | 'uploads' | 'grades' | 'profile';
+export type TabScreens = 'home' | 'courses' | 'uploads' | 'notes' | 'profile';
 
 interface Props {
     navigation: NavigationProp;
@@ -99,7 +100,7 @@ export const MainTabContainer: React.FC<Props> = ({
         // Update badge counts when tab is accessed
         if (tabId === 'uploads') {
             setUploadsBadgeCount(0);
-        } else if (tabId === 'grades') {
+        } else if (tabId === 'notes') {
             setGradesBadgeCount(0);
         }
     };
@@ -118,8 +119,8 @@ export const MainTabContainer: React.FC<Props> = ({
                 return <MyCoursesScreen navigation={navigation} />;
             case 'uploads':
                 return <UploadsOverviewScreen navigation={navigation as any} route={mockRoute} />;
-            case 'grades':
-                return <GradesOverviewScreen />;
+            case 'notes':
+                return <NotesListScreen navigation={navigation} />;
             case 'profile':
                 return <ProfileScreen navigation={navigation} />;
             default:
@@ -151,12 +152,11 @@ export const MainTabContainer: React.FC<Props> = ({
             onPress: () => handleTabPress('uploads'),
         },
         {
-            id: 'grades',
-            label: 'Grades',
-            icon: 'school-outline',
-            activeIcon: 'school',
-            badge: gradesBadgeCount,
-            onPress: () => handleTabPress('grades'),
+            id: 'notes',
+            label: 'Notes',
+            icon: 'document-text-outline',
+            activeIcon: 'document-text',
+            onPress: () => handleTabPress('notes'),
         },
         {
             id: 'profile',

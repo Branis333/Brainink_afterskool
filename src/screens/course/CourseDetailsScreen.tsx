@@ -98,12 +98,24 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 }
 
                 setProgress(progressData);
-                // Recalculate enrollment flag based on any progress or assignments already fetched later
-                setIsEnrolled(!!progressData);
+                // NOTE: Do NOT set isEnrolled based on progress data alone - progress can exist for non-enrolled users
+                // Enrollment should only be determined by StudentAssignment presence (checked in loadAssignments)
                 try {
                     await detectActiveSessions(courseData, progressData);
                 } catch (e) {
                     console.warn('Active session detection skipped', e);
+                }
+                // Lightweight enrollment detection: if user has any assignments for this course, consider enrolled
+                try {
+                    const myAssignments = await afterSchoolService.getMyAssignments(token, { course_id: courseId, limit: 1 });
+                    if (Array.isArray(myAssignments) && myAssignments.length > 0) {
+                        setIsEnrolled(true);
+                    } else {
+                        setIsEnrolled(false);
+                    }
+                } catch (e) {
+                    // If this check fails, do not assume enrollment
+                    setIsEnrolled(false);
                 }
             })();
             await inFlightRef.current;
@@ -146,7 +158,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         if (!token) return;
         if (enrolling) return;
         // If we already have progress or assignments, assume enrolled
-        if (isEnrolled || progress || assignments.length > 0) return;
+        if (isEnrolled || assignments.length > 0) return;
         try {
             setEnrolling(true);
             const res = await afterSchoolService.enrollInCourse(courseId, token);
@@ -459,7 +471,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
 
             {/* Enroll Button */}
             <View style={styles.enrollSection}>
-                {isEnrolled || progress || assignments.length > 0 ? (
+                {isEnrolled || assignments.length > 0 ? (
                     <TouchableOpacity style={styles.enrolledButton}>
                         <Text style={styles.enrolledButtonText}>Enrolled</Text>
                     </TouchableOpacity>
@@ -470,7 +482,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                         style={[styles.enrollNowButton, enrolling && { opacity: 0.7 }]}
                     >
                         <Text style={styles.enrollNowButtonText}>
-                            {enrolling ? 'Enrolling…' : 'Buy Now'}
+                            {enrolling ? 'Enrolling…' : 'Enroll'}
                         </Text>
                     </TouchableOpacity>
                 )}
@@ -498,7 +510,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 onPress={() => onTabChange('assignments')}
             >
                 <Text style={[styles.modernTabText, activeTab === 'assignments' && styles.modernTabTextActive]}>
-                    File
+                    Assignments
                 </Text>
             </TouchableOpacity>
 
@@ -507,7 +519,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 onPress={() => onTabChange('progress')}
             >
                 <Text style={[styles.modernTabText, activeTab === 'progress' && styles.modernTabTextActive]}>
-                    Discussions
+                    Progress
                 </Text>
             </TouchableOpacity>
         </View>

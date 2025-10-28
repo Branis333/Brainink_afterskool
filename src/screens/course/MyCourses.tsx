@@ -88,8 +88,9 @@ export const MyCoursesScreen: React.FC<Props> = ({ navigation }) => {
             }
 
             // Get student dashboard which includes enrolled courses
-            const dashboard = await afterSchoolService.getStudentDashboard(token);
-            setCourses(dashboard.active_courses || []);
+            // My Courses should only show truly enrolled courses via dedicated endpoint
+            const dashboard = await afterSchoolService.getMyCourses(token);
+            let enrolledCourses = dashboard.active_courses || [];
 
             // Build progress map from dashboard summary
             const progressMap: { [key: number]: StudentProgress } = {};
@@ -101,7 +102,7 @@ export const MyCoursesScreen: React.FC<Props> = ({ navigation }) => {
 
             // Load assignments for each course
             const assignmentMap: { [key: number]: StudentAssignment[] } = {};
-            for (const course of dashboard.active_courses || []) {
+            for (const course of enrolledCourses) {
                 try {
                     // Get course assignments
                     const assignments = await afterSchoolService.getCourseAssignments(course.id, token);
@@ -112,6 +113,11 @@ export const MyCoursesScreen: React.FC<Props> = ({ navigation }) => {
                 }
             }
 
+            // Safety: filter out any course with zero student assignments
+            // (in case backend state is inconsistent)
+            enrolledCourses = enrolledCourses.filter(c => (assignmentMap[c.id]?.length || 0) > 0);
+
+            setCourses(enrolledCourses);
             setCourseProgress(progressMap);
             setCourseAssignments(assignmentMap);
         } catch (error) {

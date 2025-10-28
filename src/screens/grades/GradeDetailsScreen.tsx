@@ -9,11 +9,12 @@ import {
     ActivityIndicator,
     Dimensions,
     Modal,
-    Image
+    Image,
+    RefreshControl
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../navigation/AppNavigatorNew';
 import { useAuth } from '../../context/AuthContext';
@@ -32,6 +33,7 @@ export const GradeDetailsScreen: React.FC = () => {
     const { token } = useAuth();
 
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [submission, setSubmission] = useState<AISubmission | null>(null);
     const [showFeedbackModal, setShowFeedbackModal] = useState(false);
     const [activeTab, setActiveTab] = useState<'overview' | 'feedback' | 'improvements'>('overview');
@@ -69,18 +71,29 @@ export const GradeDetailsScreen: React.FC = () => {
         return t;
     }, []);
 
-    useEffect(() => {
-        loadSubmissionDetails();
-    }, [submissionId]);
+    // Auto-refresh when screen comes into focus (ensures latest grades are shown)
+    useFocusEffect(
+        useCallback(() => {
+            loadSubmissionDetails();
+        }, [submissionId, token])
+    );
 
-    const loadSubmissionDetails = async () => {
+    // Optional: Keep previous useEffect for initial mount
+    useEffect(() => {
+        if (!token) return;
+        loadSubmissionDetails();
+    }, []);
+
+    const loadSubmissionDetails = async (isRefresh = false) => {
         if (!token) {
             Alert.alert('Error', 'Please log in to view submission details');
             return;
         }
 
         try {
-            setLoading(true);
+            if (!isRefresh) setLoading(true);
+
+            // Always fetch fresh data from server (no caching)
             const submissionData = await gradesService.getAISubmission(submissionId, token);
             setSubmission(submissionData);
 
@@ -122,7 +135,13 @@ export const GradeDetailsScreen: React.FC = () => {
             navigation.goBack();
         } finally {
             setLoading(false);
+            setRefreshing(false);
         }
+    };
+
+    const onRefresh = () => {
+        setRefreshing(true);
+        loadSubmissionDetails(true);
     };
 
     const getSubmissionIcon = (type: string) => {
@@ -591,7 +610,17 @@ export const GradeDetailsScreen: React.FC = () => {
                 </TouchableOpacity>
             </View>
 
-            <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+            <ScrollView
+                style={styles.content}
+                showsVerticalScrollIndicator={false}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                        tintColor="#3B82F6"
+                    />
+                }
+            >
                 {activeTab === 'overview' && renderOverviewTab()}
                 {activeTab === 'feedback' && renderFeedbackTab()}
                 {activeTab === 'improvements' && renderImprovementsTab()}

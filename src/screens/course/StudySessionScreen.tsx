@@ -504,7 +504,21 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                     </Text>
                     <TouchableOpacity
                         style={styles.assignmentsAllButton}
-                        onPress={() => navigation.navigate('CourseAssignment', { courseId, courseTitle })}
+                        onPress={async () => {
+                            try {
+                                if (!token) throw new Error('No authentication token');
+                                const one = await afterSchoolService.getOneAssignment(courseId, token, { block_id: blockId, lesson_id: lessonId, prefer_status: 'assigned' });
+                                const pickedId = one?.assignment?.id;
+                                if (pickedId) {
+                                    navigation.navigate('CourseAssignment', { courseId, courseTitle, assignmentId: pickedId, startWorkflow: true });
+                                    return;
+                                }
+                            } catch (e: any) {
+                                // Fallback: open filtered list
+                                console.log('ℹ️ getOneAssignment failed, falling back to list:', e?.message || e);
+                            }
+                            navigation.navigate('CourseAssignment', { courseId, courseTitle, lessonId, blockId });
+                        }}
                     >
                         <Text style={styles.assignmentsAllButtonText}>Browse Course Assignments</Text>
                     </TouchableOpacity>
