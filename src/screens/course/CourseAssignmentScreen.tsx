@@ -42,6 +42,9 @@ type RouteProp_ = RouteProp<{
         assignmentId?: number;
         assignmentTitle?: string;
         startWorkflow?: boolean;
+        // Optional focus parameters to filter assignments to a specific lesson/block
+        lessonId?: number;
+        blockId?: number;
     }
 }>;
 
@@ -51,7 +54,7 @@ interface Props {
 }
 
 export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) => {
-    const { courseId, courseTitle, assignmentId, assignmentTitle, startWorkflow } = route.params;
+    const { courseId, courseTitle, assignmentId, assignmentTitle, startWorkflow, lessonId: focusLessonId, blockId: focusBlockId } = route.params;
     const { token } = useAuth();
 
     const [course, setCourse] = useState<CourseWithLessons | null>(null);
@@ -59,7 +62,8 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
     // Raw assignment definitions (course-level, not user-specific)
     const [rawAssignments, setRawAssignments] = useState<CourseAssignment[]>([]);
     const [currentAssignment, setCurrentAssignment] = useState<StudentAssignment | null>(null);
-    const [assignmentStatus, setAssignmentStatus] = useState<AssignmentStatus | null>(null);
+    // Map of assignment_id to AssignmentStatus for per-assignment attempt tracking
+    const [assignmentStatuses, setAssignmentStatuses] = useState<Record<number, AssignmentStatus>>({});
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'submitted'>('all');
@@ -76,6 +80,9 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
     const [contextBlockId, setContextBlockId] = useState<number | undefined>(undefined);
     // Toggle to reveal technical feedback details when there's an issue
     const [showTechDetails, setShowTechDetails] = useState(false);
+    // When starting a workflow from a specific card (Start/Retry), lock the
+    // selected assignment id so data reloads cannot swap the context.
+    const lockedAssignmentIdRef = React.useRef<number | null>(null);
 
     // Sanitize raw AI feedback to avoid leaking provider/system errors to users (mirrors GradeDetails)
     const cleanAIText = useCallback((text?: string | null): string | null => {
@@ -119,6 +126,7 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
     // Initialize workflow if requested
     useEffect(() => {
         if (startWorkflow && assignmentId) {
+            lockedAssignmentIdRef.current = assignmentId;
             setWorkflowActive(true);
             setWorkflowStep('instructions');
         }
@@ -140,21 +148,100 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                 afterSchoolService.getCourseAssignmentDefinitions(courseId, token).catch(() => [])
             ]);
 
+            // Hydrate/merge student assignments with course-level definitions to ensure
+            // instructions/description are always available, even if backend omits them
+            // on certain responses (e.g., after submission).
+            const definitionById = new Map<number, CourseAssignment>(
+                (definitions || []).map(d => [d.id, d])
+            );
+
+            let hydratedAssignments: StudentAssignment[] = (assignmentsData || []).map(sa => {
+                const def = definitionById.get(sa.assignment?.id ?? sa.assignment_id);
+                if (!def) return sa;
+                // Prefer definition fields for static metadata (title, description, instructions, etc.)
+                // while preserving student-specific fields from sa.assignment when present.
+                const mergedAssignment: CourseAssignment = {
+                    ...(sa.assignment || {} as any),
+                    ...(def as any),
+                } as CourseAssignment;
+
+                // If instructions ended up empty/undefined, explicitly backfill from definition
+                if (!mergedAssignment.instructions && def.instructions) {
+                    mergedAssignment.instructions = def.instructions;
+                }
+                if (!mergedAssignment.description && def.description) {
+                    mergedAssignment.description = def.description;
+                }
+
+                return { ...sa, assignment: mergedAssignment };
+            });
+
+            // Deep hydration fallback: if any assignment still lacks instructions/description, fetch details
+            const assignmentsNeedingDetails = hydratedAssignments.filter(a => !a.assignment || (!a.assignment.instructions && !a.assignment.description));
+            if (assignmentsNeedingDetails.length > 0) {
+                try {
+                    const detailResults = await Promise.all(
+                        assignmentsNeedingDetails.map(a => afterSchoolService.getAssignmentDetails(courseId, a.assignment_id, token).catch(() => null))
+                    );
+                    const byId: Record<number, StudentAssignment> = {};
+                    detailResults.forEach(res => {
+                        if (res) byId[res.assignment_id] = res;
+                    });
+                    hydratedAssignments = hydratedAssignments.map(a => {
+                        const det = byId[a.assignment_id];
+                        if (!det) return a;
+                        const mergedAssignment: CourseAssignment | undefined = (det as any)?.assignment
+                            ? ({ ...(a.assignment || {}), ...(det as any).assignment } as CourseAssignment)
+                            : a.assignment;
+                        return {
+                            ...a,
+                            assignment: mergedAssignment || a.assignment,
+                        };
+                    });
+                } catch (e) {
+                    console.warn('Assignment detail hydration partially failed:', e);
+                }
+            }
+
             setCourse(courseData);
-            setAssignments(assignmentsData);
+            setAssignments(hydratedAssignments);
             setRawAssignments(definitions);
 
-            // If a specific assignment is requested, only proceed if the student actually has it
-            if (assignmentId) {
-                const assignment = assignmentsData.find(a => a.assignment_id === assignmentId);
+            // Prefer the explicitly locked selection (from Start/Retry) if present.
+            const preferredId = lockedAssignmentIdRef.current ?? assignmentId ?? null;
+            if (preferredId) {
+                const assignment = hydratedAssignments.find(a => a.assignment_id === preferredId);
                 if (assignment) {
                     setCurrentAssignment(assignment);
 
-                    // Load assignment status for the current assignment (mark-done model)
-                    const status = await afterSchoolService.getAssignmentStatus(assignmentId.toString(), token);
-                    setAssignmentStatus(status); // Will be null if not found, which is handled gracefully
-                } // else: silently ignore; user will see list without disruptive alert
+                    // Load assignment status for the preferred assignment (mark-done model)
+                    try {
+                        const status = await afterSchoolService.getAssignmentStatus(preferredId.toString(), token);
+                        if (status) {
+                            setAssignmentStatuses(prev => ({ ...prev, [preferredId]: status }));
+                        }
+                    } catch { }
+                }
             }
+
+            // Load statuses for all student assignments to enable per-assignment attempt tracking
+            const statusPromises = hydratedAssignments.map(async (assignment) => {
+                try {
+                    const status = await afterSchoolService.getAssignmentStatus(assignment.assignment_id.toString(), token);
+                    return { assignmentId: assignment.assignment_id, status };
+                } catch {
+                    return null;
+                }
+            });
+
+            const statusResults = await Promise.all(statusPromises);
+            const statusMap: Record<number, AssignmentStatus> = {};
+            statusResults.forEach(result => {
+                if (result && result.status) {
+                    statusMap[result.assignmentId] = result.status;
+                }
+            });
+            setAssignmentStatuses(statusMap);
 
         } catch (error) {
             console.error('Error loading assignment data:', error);
@@ -182,9 +269,30 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
         loadAssignmentData(true);
     }, []);
 
+    // Helper to check focus filters
+    const isAssignmentInFocus = useCallback((a: StudentAssignment) => {
+        const aLessonId = (a.assignment as any)?.lesson_id as number | undefined;
+        const aBlockId = (a.assignment as any)?.block_id as number | undefined ?? (a as any)?.block_id;
+        if (focusBlockId && aBlockId !== focusBlockId) return false;
+        if (focusLessonId && aLessonId !== focusLessonId) return false;
+        return true;
+    }, [focusLessonId, focusBlockId]);
+
+    const isDefinitionInFocus = useCallback((d: CourseAssignment) => {
+        const dLessonId = (d as any)?.lesson_id as number | undefined;
+        const dBlockId = (d as any)?.block_id as number | undefined;
+        if (focusBlockId && dBlockId !== focusBlockId) return false;
+        if (focusLessonId && dLessonId !== focusLessonId) return false;
+        return true;
+    }, [focusLessonId, focusBlockId]);
+
+    const visibleAssignments = (focusLessonId || focusBlockId)
+        ? assignments.filter(isAssignmentInFocus)
+        : assignments;
+
     // Build a set of assigned definition ids to prevent duplicates in Available section
     const assignedDefinitionIds = new Set(
-        assignments
+        visibleAssignments
             .map(a => (a.assignment?.id ?? a.assignment_id))
             .filter(id => typeof id === 'number')
     );
@@ -207,18 +315,21 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
 
     const availableDefinitionAdapters: StudentAssignment[] = (rawAssignments || [])
         .filter(def => !assignedDefinitionIds.has(def.id))
+        .filter(def => (focusLessonId || focusBlockId) ? isDefinitionInFocus(def) : true)
         .map(adaptDefinition);
 
     // Tab counts and filtering
-    const pendingAssigned = assignments.filter(a => a.status === 'assigned');
-    const submittedOrGraded = assignments.filter(a => a.status === 'submitted' || a.status === 'graded');
-    const allCount = assignments.length + availableDefinitionAdapters.length;
+    const pendingAssigned = visibleAssignments.filter(a => a.status === 'assigned');
+    const submittedOrGraded = visibleAssignments.filter(a => a.status === 'submitted' || a.status === 'graded');
+    const allCount = visibleAssignments.length + availableDefinitionAdapters.length;
 
     // Start assignment workflow
     const startAssignmentWorkflow = (assignment?: StudentAssignment) => {
         const targetAssignment = assignment || currentAssignment;
         if (!targetAssignment) return;
 
+        // Lock selection so reloads don't switch the context
+        lockedAssignmentIdRef.current = targetAssignment.assignment_id;
         setCurrentAssignment(targetAssignment);
         setWorkflowActive(true);
         setWorkflowStep('instructions');
@@ -229,25 +340,35 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
     };
 
     // Retry assignment
-    const retryAssignment = async () => {
-        if (!currentAssignment || !token) return;
+    const retryAssignment = async (assignmentParam?: StudentAssignment) => {
+        const target = assignmentParam || currentAssignment;
+        if (!target || !token) return;
 
         try {
             setGrading(true);
 
-            const result = await afterSchoolService.retryAssignment(currentAssignment.assignment_id.toString(), token);
+            // Ensure the selected assignment becomes the current context
+            setCurrentAssignment(target);
+            lockedAssignmentIdRef.current = target.assignment_id;
+
+            const result = await afterSchoolService.retryAssignment(target.assignment_id.toString(), token);
+
+            const attemptsRemaining = result?.retry_info?.attempts_remaining ?? result?.student_assignment?.attempts_remaining ?? 0;
+            const baseMessage = result?.message || 'Retry ready. Submit new work to continue.';
+            const attemptsLine = `Attempts remaining today: ${attemptsRemaining}`;
 
             Alert.alert(
-                'Assignment Reset',
-                `Assignment retry initiated. You have ${result.grade_response.attempts_remaining} attempts remaining.`,
+                attemptsRemaining > 0 ? 'Retry Ready' : 'Retry Unavailable',
+                `${baseMessage}\n\n${attemptsLine}`,
                 [
                     {
                         text: 'Start Retry',
                         onPress: () => {
                             // Refresh assignment status and start workflow
                             loadAssignmentData();
-                            startAssignmentWorkflow();
-                        }
+                            startAssignmentWorkflow(target);
+                        },
+                        style: attemptsRemaining > 0 ? 'default' : 'cancel'
                     },
                     { text: 'Later', style: 'cancel' }
                 ]
@@ -300,12 +421,17 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                                 base64: false,
                             });
                             if (!result.canceled && result.assets?.length) {
-                                const newFiles = result.assets.map((asset, idx): UploadFile => ({
-                                    uri: asset.uri,
-                                    name: (asset as any).fileName || asset.uri.split('/').pop() || `photo_${Date.now()}_${idx}.jpg`,
-                                    type: asset.mimeType || 'image/jpeg',
-                                }));
+                                const newFiles = result.assets.map((asset, idx): UploadFile => {
+                                    const file = {
+                                        uri: asset.uri,
+                                        name: (asset as any).fileName || asset.uri.split('/').pop() || `photo_${Date.now()}_${idx}.jpg`,
+                                        type: asset.mimeType || 'image/jpeg',
+                                    };
+                                    console.log(`📷 Camera photo ${idx + 1}:`, file);
+                                    return file;
+                                });
                                 setSelectedImages(prev => [...prev, ...newFiles]);
+                                console.log(`✅ Added ${newFiles.length} photos from camera`);
                             }
                         }
                     },
@@ -323,12 +449,17 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                                 base64: false,
                             });
                             if (!result.canceled && result.assets?.length) {
-                                const newFiles = result.assets.map((asset, idx): UploadFile => ({
-                                    uri: asset.uri,
-                                    name: (asset as any).fileName || asset.uri.split('/').pop() || `image_${Date.now()}_${idx}.jpg`,
-                                    type: asset.mimeType || 'image/jpeg',
-                                }));
+                                const newFiles = result.assets.map((asset, idx): UploadFile => {
+                                    const file = {
+                                        uri: asset.uri,
+                                        name: (asset as any).fileName || asset.uri.split('/').pop() || `image_${Date.now()}_${idx}.jpg`,
+                                        type: asset.mimeType || 'image/jpeg',
+                                    };
+                                    console.log(`🖼️ Photo library image ${idx + 1}:`, file);
+                                    return file;
+                                });
                                 setSelectedImages(prev => [...prev, ...newFiles]);
+                                console.log(`✅ Added ${newFiles.length} images from photo library`);
                             }
                         }
                     },
@@ -409,7 +540,26 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                 throw new Error(validation.error || 'Invalid images selected');
             }
 
-            // Upload images → PDF → AI processing
+            // CRITICAL: Verify all file URIs are accessible before uploading
+            console.log('🔍 Verifying file URIs before upload...');
+            for (let i = 0; i < selectedImages.length; i++) {
+                const file = selectedImages[i];
+                console.log(`  File ${i + 1}:`, {
+                    name: file.name,
+                    type: file.type,
+                    uri: file.uri,
+                    hasUri: !!file.uri,
+                    hasName: !!file.name,
+                    hasType: !!file.type
+                });
+
+                if (!file.uri || !file.name || !file.type) {
+                    throw new Error(`File ${i + 1} is missing required properties (uri, name, or type)`);
+                }
+            }
+            console.log('✅ All files validated successfully');
+
+            // Upload images → AI processing (no PDF conversion)
             setUploadProgress(40);
             const workflow = await uploadsService.uploadImagesForAssignmentWorkflow(
                 courseId,
@@ -422,12 +572,97 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
 
             setUploadProgress(80);
 
-            // Use AI results from workflow
+            // Parse raw AI results from workflow
             const ai: AIProcessingResults | undefined = workflow.ai_processing;
-            // Preserve undefined when score isn't available to avoid showing 0% incorrectly
-            const aiScore = typeof ai?.ai_score === 'number' ? ai.ai_score : undefined;
-            const aiFeedback = ai?.ai_feedback ?? '';
+
+            // Helper to parse normalized Gemini data (backend now normalizes)
+            const parseGeminiScore = (raw: any): number | null => {
+                if (!raw || typeof raw !== 'object') return null;
+
+                // Backend normalizes keys, so check clean keys first
+                const scoreKeys = ['score', 'percentage'];
+                for (const key of scoreKeys) {
+                    if (key in raw && raw[key] != null) {
+                        const val = raw[key];
+                        if (typeof val === 'number') return val;
+                        if (typeof val === 'string') {
+                            const num = parseFloat(val);
+                            return isNaN(num) ? null : num;
+                        }
+                    }
+                }
+                return null;
+            };
+
+            const parseGeminiFeedback = (raw: any): string => {
+                if (!raw || typeof raw !== 'object') return '';
+
+                // Backend normalizes keys, so use clean keys
+                const feedbackKeys = ['overall_feedback', 'detailed_feedback', 'feedback'];
+                for (const key of feedbackKeys) {
+                    if (key in raw && raw[key]) {
+                        const val = raw[key];
+                        if (typeof val === 'string') {
+                            return val.trim();
+                        }
+                    }
+                }
+                return '';
+            };
+
+            // Check if there's an error in the raw response
+            const hasError = ai?.raw && ai.raw.error;
+
+            if (hasError) {
+                console.error('❌ Gemini returned an error:', ai.raw.error);
+
+                // Show user-friendly error message
+                Alert.alert(
+                    'AI Processing Issue',
+                    'The AI had trouble processing your submission. This is usually temporary. Please try submitting again.',
+                    [
+                        { text: 'Try Again', onPress: () => setWorkflowStep('upload') },
+                        { text: 'Cancel', style: 'cancel' }
+                    ]
+                );
+
+                setGrading(false);
+                setUploadProgress(0);
+                return; // Exit early, don't set results
+            }
+
+            const aiScore = ai?.raw ? parseGeminiScore(ai.raw) : null;
+            const aiFeedback = ai?.raw ? parseGeminiFeedback(ai.raw) : '';
             const hasIssue = isProcessingIssue(aiFeedback);
+
+            console.log('🎯 AI Processing Results:', {
+                hasAI: !!ai,
+                rawKeys: ai?.raw ? Object.keys(ai.raw) : [],
+                rawScore: aiScore,
+                computedScore: aiScore ?? 0,
+                hasIssue,
+                feedbackLength: aiFeedback?.length || 0,
+                rawScoreValue: ai?.raw?.score,
+                rawPercentageValue: ai?.raw?.percentage,
+                hasErrorKey: ai?.raw ? 'error' in ai.raw : false
+            });
+
+            // If score is still null after parsing, treat as processing issue
+            if (aiScore === null) {
+                console.warn('⚠️ No valid score found in AI response');
+                Alert.alert(
+                    'Incomplete AI Results',
+                    'The AI processed your submission but couldn\'t generate a score. Please try again or contact support.',
+                    [
+                        { text: 'Try Again', onPress: () => setWorkflowStep('upload') },
+                        { text: 'Cancel', style: 'cancel' }
+                    ]
+                );
+
+                setGrading(false);
+                setUploadProgress(0);
+                return; // Exit early
+            }
 
             setResults({
                 id: workflow.pdf_submission.submission_id || 0,
@@ -443,6 +678,8 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                 submitted_at: new Date().toISOString(),
                 processed_at: new Date().toISOString()
             } as any);
+
+            console.log('✅ Results state set with score:', aiScore);
 
             // Reflect results in UI
             setWorkflowStep('results');
@@ -472,6 +709,7 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
         setResults(null);
         setContextLessonId(undefined);
         setContextBlockId(undefined);
+        lockedAssignmentIdRef.current = null;
 
         // Refresh assignments to show updated status
         loadAssignmentData(true);
@@ -510,8 +748,10 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
 
     // Get assignment status display
     const getAssignmentStatusDisplay = (assignment: StudentAssignment) => {
-        // Use new assignment status if available
-        if (assignmentStatus && assignment.assignment_id.toString() === assignmentStatus.assignment.id.toString()) {
+        // Use status from the map for THIS specific assignment
+        const assignmentStatus = assignmentStatuses[assignment.assignment_id];
+
+        if (assignmentStatus) {
             const mappedStatus = mapBackendStatusToFrontend(
                 assignmentStatus.student_assignment.status,
                 assignmentStatus.student_assignment.grade,
@@ -633,6 +873,14 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
 
         switch (workflowStep) {
             case 'instructions':
+                // Build robust instruction text using multiple fallbacks
+                const defForCurrent = rawAssignments.find(d => d.id === (currentAssignment.assignment?.id ?? currentAssignment.assignment_id));
+                const displayInstructions = currentAssignment.assignment?.instructions
+                    || currentAssignment.assignment?.description
+                    || defForCurrent?.instructions
+                    || defForCurrent?.description
+                    || '';
+                const learningOutcomes: string[] | undefined = (currentAssignment.assignment as any)?.learning_outcomes || (defForCurrent as any)?.learning_outcomes;
                 return (
                     <View style={styles.workflowContainer}>
                         <View style={styles.workflowHeader}>
@@ -648,28 +896,27 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                         <View style={styles.workflowContent}>
                             <Text style={styles.workflowStepTitle}>📋 Assignment Instructions</Text>
 
-                            {currentAssignment.assignment?.description && (
-                                <View style={styles.descriptionBlock}>
-                                    <Text style={styles.instructionsText}>
-                                        {currentAssignment.assignment.description}
-                                    </Text>
-                                </View>
-                            )}
-
-                            {currentAssignment.assignment?.instructions && (
+                            {displayInstructions ? (
                                 <View style={styles.detailedInstructionsBlock}>
                                     <Text style={styles.detailedInstructionsTitle}>Detailed Instructions:</Text>
                                     <Text style={styles.detailedInstructionsText}>
-                                        {currentAssignment.assignment.instructions}
+                                        {displayInstructions}
                                     </Text>
                                 </View>
-                            )}
-
-                            {!currentAssignment.assignment?.description && !currentAssignment.assignment?.instructions && (
+                            ) : (
                                 <View style={styles.noInstructionsBlock}>
                                     <Text style={styles.noInstructionsText}>
                                         No specific instructions provided. Please complete the assignment based on the course materials.
                                     </Text>
+                                </View>
+                            )}
+
+                            {Array.isArray(learningOutcomes) && learningOutcomes.length > 0 && (
+                                <View style={styles.detailedInstructionsBlock}>
+                                    <Text style={styles.detailedInstructionsTitle}>Learning Outcomes:</Text>
+                                    {learningOutcomes.map((lo, idx) => (
+                                        <Text key={idx} style={styles.detailedInstructionsText}>• {lo}</Text>
+                                    ))}
                                 </View>
                             )}
 
@@ -711,7 +958,7 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                         <View style={styles.workflowContent}>
                             <Text style={styles.uploadInstructions}>
                                 Take photos of your completed assignment. The system will automatically
-                                convert them to PDF and grade your work using AI.
+                                send them to AI and grade your work.
                             </Text>
 
                             <View style={styles.uploadArea}>
@@ -765,7 +1012,7 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                         <View style={styles.processingContent}>
                             <Text style={styles.processingTitle}>Processing Assignment...</Text>
                             <Text style={styles.processingDescription}>
-                                We're converting your images to PDF and running AI analysis.
+                                We're sending your images to AI and running analysis.
                                 This usually takes a few moments.
                             </Text>
 
@@ -799,7 +1046,7 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                                     <View style={styles.scoreContainer}>
                                         <Text style={styles.scoreLabel}>Your Score:</Text>
                                         <Text style={styles.scoreValue}>
-                                            {typeof results.ai_score === 'number' && !isNaN(results.ai_score)
+                                            {results.ai_score != null && typeof results.ai_score === 'number' && !isNaN(results.ai_score)
                                                 ? `${Math.round(results.ai_score)}%`
                                                 : '— Pending'}
                                         </Text>
@@ -911,6 +1158,10 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
     const renderAssignmentCard = (assignment: StudentAssignment) => {
         const statusDisplay = getAssignmentStatusDisplay(assignment);
         const isCompleted = assignment.status === 'graded';
+
+        // Get status for THIS specific assignment from the map
+        const assignmentStatus = assignmentStatuses[assignment.assignment_id];
+
         const mappedStatus = assignmentStatus ? mapBackendStatusToFrontend(
             assignmentStatus.student_assignment.status,
             assignmentStatus.student_assignment.grade,
@@ -923,6 +1174,13 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
         const canRetry = mappedStatus === 'failed_can_retry';
         const isPassed = mappedStatus === 'passed';
         const hasMaxAttempts = mappedStatus === 'failed_no_retry';
+
+        // Compute robust instruction fallback from raw definitions if nested assignment metadata is missing
+        const fallbackDef = rawAssignments.find(d => d.id === (assignment.assignment?.id ?? assignment.assignment_id));
+        const instructionText = assignment.assignment?.instructions
+            || assignment.assignment?.description
+            || fallbackDef?.instructions
+            || fallbackDef?.description;
 
         return (
             <View style={styles.assignmentCard}>
@@ -972,9 +1230,9 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
 
                 <View style={styles.instructionsContainer}>
                     <Text style={styles.instructionsTitle}>Instructions:</Text>
-                    {(assignment.assignment?.instructions || assignment.assignment?.description) ? (
+                    {instructionText ? (
                         <Text style={styles.instructionsText}>
-                            {assignment.assignment?.instructions || assignment.assignment?.description}
+                            {instructionText}
                         </Text>
                     ) : (
                         <Text style={[styles.instructionsText, styles.noInstructionsText]}>
@@ -1032,20 +1290,38 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                                 {assignmentStatus.attempts_info.attempts_used}/3
                             </Text>
                         </View>
-                        {assignmentStatus.student_assignment.grade !== undefined && (
+                        {assignmentStatus.attempts_info.latest_submission_at && (
                             <View style={styles.assignmentDetailItem}>
-                                <Text style={styles.assignmentDetailLabel}>Best Score:</Text>
-                                <Text style={[
-                                    styles.assignmentDetailValue,
-                                    {
-                                        color: assignmentStatus.student_assignment.grade >= 80 ? '#28A745' : '#dc3545',
-                                        fontWeight: 'bold'
-                                    }
-                                ]}>
-                                    {assignmentStatus.student_assignment.grade}%
+                                <Text style={styles.assignmentDetailLabel}>Last Submission:</Text>
+                                <Text style={styles.assignmentDetailValue}>
+                                    {gradesService.formatRelativeTime(assignmentStatus.attempts_info.latest_submission_at)}
                                 </Text>
                             </View>
                         )}
+                        {assignmentStatus.student_assignment.submission_id && (
+                            <View style={styles.assignmentDetailItem}>
+                                <Text style={styles.assignmentDetailLabel}>Submission ID:</Text>
+                                <Text style={styles.assignmentDetailValue}>
+                                    #{assignmentStatus.student_assignment.submission_id}
+                                </Text>
+                            </View>
+                        )}
+                        {assignmentStatus.student_assignment.submitted_at &&
+                            assignmentStatus.student_assignment.grade !== undefined &&
+                            assignmentStatus.student_assignment.grade !== null && (
+                                <View style={styles.assignmentDetailItem}>
+                                    <Text style={styles.assignmentDetailLabel}>Best Score:</Text>
+                                    <Text style={[
+                                        styles.assignmentDetailValue,
+                                        {
+                                            color: assignmentStatus.student_assignment.grade >= 80 ? '#28A745' : '#dc3545',
+                                            fontWeight: 'bold'
+                                        }
+                                    ]}>
+                                        {assignmentStatus.student_assignment.grade}%
+                                    </Text>
+                                </View>
+                            )}
                         {/* Next attempt timing - using message field from backend */}
                         {assignmentStatus.message && !assignmentStatus.passing_grade && (
                             <View style={styles.assignmentDetailItem}>
@@ -1081,7 +1357,7 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                             <TouchableOpacity
                                 style={[styles.submitButton, { backgroundColor: '#FD7E14', flex: 1, marginRight: 8 }]}
-                                onPress={retryAssignment}
+                                onPress={() => retryAssignment(assignment)}
                                 disabled={grading}
                             >
                                 {grading ? (

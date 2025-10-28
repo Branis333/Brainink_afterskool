@@ -1,0 +1,622 @@
+<!-- <!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Paper Grading Test - Puter.js</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 800px;
+            width: 100%;
+            padding: 40px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        .subtitle {
+            color: #666;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .form-section {
+            margin-bottom: 25px;
+        }
+
+        .form-section label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .form-section input[type="text"],
+        .form-section textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 6px;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .form-section input[type="text"]:focus,
+        .form-section textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .form-section textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+            cursor: pointer;
+            width: 100%;
+        }
+
+        .file-input-wrapper input[type="file"] {
+            position: absolute;
+            left: -9999px;
+        }
+
+        .file-input-label {
+            display: block;
+            padding: 12px;
+            background: #f5f5f5;
+            border: 2px dashed #667eea;
+            border-radius: 6px;
+            text-align: center;
+            color: #667eea;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .file-input-label:hover {
+            background: #f0f0ff;
+            border-color: #764ba2;
+        }
+
+        .file-name {
+            margin-top: 8px;
+            font-size: 13px;
+            color: #666;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 30px;
+        }
+
+        button {
+            flex: 1;
+            padding: 14px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .btn-grade {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-grade:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .btn-grade:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-reset {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .btn-reset:hover {
+            background: #e0e0e0;
+        }
+
+        .results-section {
+            margin-top: 40px;
+            padding-top: 30px;
+            border-top: 2px solid #e0e0e0;
+            display: none;
+        }
+
+        .results-section.active {
+            display: block;
+        }
+
+        .result-card {
+            background: #f9f9f9;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 15px;
+        }
+
+        .result-card h3 {
+            color: #667eea;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        .result-card p {
+            color: #666;
+            line-height: 1.6;
+            margin-bottom: 8px;
+        }
+
+        .score-display {
+            font-size: 24px;
+            font-weight: bold;
+            color: #764ba2;
+            margin: 15px 0;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            border-left: 4px solid #c62828;
+        }
+
+        .success {
+            background: #e8f5e9;
+            color: #2e7d32;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            border-left: 4px solid #2e7d32;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>📝 Paper Grading System</h1>
+        <p class="subtitle">Test grading using Puter.js + GPT-5 (No data saved)</p>
+
+        <!-- SECTION 1: ASSIGNMENT INPUT FORM -->
+        <div id="inputForm">
+            <div class="form-section">
+                <label for="assignmentName">Assignment Name</label>
+                <input type="text" id="assignmentName" placeholder="e.g., Essay on Climate Change" required>
+            </div>
+
+            <div class="form-section">
+                <label for="rubric">Grading Rubric</label>
+                <textarea id="rubric"
+                    placeholder="Enter grading criteria&#10;Example: &#10;- Content Quality (40%)&#10;- Organization (30%)&#10;- Writing Quality (20%)&#10;- Citations (10%)"
+                    required></textarea>
+            </div>
+
+            <div class="form-section">
+                <label>Upload Paper (Images, PDF, TXT)</label>
+                <div class="file-input-wrapper">
+                    <input type="file" id="paperFile" accept=".txt,.pdf,.png,.jpg,.jpeg,.gif,.bmp,.webp" required>
+                    <label for="paperFile" class="file-input-label">
+                        <div>📄 Click to upload or drag & drop</div>
+                    </label>
+                    <div class="file-name" id="fileName"></div>
+                </div>
+            </div>
+
+            <div class="button-group">
+                <button class="btn-grade" id="gradeBtn">Grade Paper with GPT-5</button>
+                <button class="btn-reset" id="resetBtn">Clear All</button>
+            </div>
+        </div>
+
+        <!-- SECTION 2: LOADING STATE -->
+        <div id="loadingState" class="loading" style="display: none;">
+            <div class="spinner"></div>
+            <p>Analyzing paper with GPT-5...</p>
+        </div>
+
+        <!-- SECTION 3: RESULTS DISPLAY -->
+        <div id="resultsSection" class="results-section">
+            <h2 style="color: #333; margin-bottom: 20px;">📊 Grading Results</h2>
+
+            <div class="result-card">
+                <h3>Assignment</h3>
+                <p id="resultAssignment"></p>
+            </div>
+
+            <div class="result-card">
+                <h3>Final Score</h3>
+                <div class="score-display" id="resultScore"></div>
+            </div>
+
+            <div class="result-card">
+                <h3>Feedback</h3>
+                <p id="resultFeedback"></p>
+            </div>
+
+            <div class="result-card">
+                <h3>Strengths</h3>
+                <p id="resultStrengths"></p>
+            </div>
+
+            <div class="result-card">
+                <h3>Areas for Improvement</h3>
+                <p id="resultImprovements"></p>
+            </div>
+
+            <div id="errorDisplay"></div>
+
+            <div class="button-group" style="margin-top: 30px;">
+                <button class="btn-reset" id="gradeAnotherBtn">Grade Another Paper</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://js.puter.com/v2/"></script>
+    <script>
+        // =============== SECTION 1: FILE UPLOAD HANDLING ===============
+        const paperFileInput = document.getElementById('paperFile');
+        const fileNameDisplay = document.getElementById('fileName');
+        const fileInputLabel = document.querySelector('.file-input-label');
+
+        // Display file name when selected
+        paperFileInput.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files[0]) {
+                fileNameDisplay.textContent = `✓ Selected: ${e.target.files[0].name}`;
+            }
+        });
+
+        // Drag and drop support
+        fileInputLabel.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fileInputLabel.style.background = '#f0f0ff';
+            fileInputLabel.style.borderColor = '#764ba2';
+        });
+
+        fileInputLabel.addEventListener('dragleave', () => {
+            fileInputLabel.style.background = '#f5f5f5';
+            fileInputLabel.style.borderColor = '#667eea';
+        });
+
+        fileInputLabel.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fileInputLabel.style.background = '#f5f5f5';
+            fileInputLabel.style.borderColor = '#667eea';
+
+            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                paperFileInput.files = e.dataTransfer.files;
+                fileNameDisplay.textContent = `✓ Selected: ${e.dataTransfer.files[0].name}`;
+            }
+        });
+
+        // =============== SECTION 2: FILE READING ===============
+        async function readFileAsText(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = reject;
+                reader.readAsText(file);
+            });
+        }
+
+        async function readFileAsBase64(file) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => resolve(e.target.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+
+        function isImageFile(filename) {
+            const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'];
+            return imageExts.some(ext => filename.toLowerCase().endsWith(ext));
+        }
+
+        function isPDFFile(filename) {
+            return filename.toLowerCase().endsWith('.pdf');
+        }
+
+        // =============== SECTION 3: VALIDATION ===============
+        function validateInputs() {
+            const assignmentName = document.getElementById('assignmentName').value.trim();
+            const rubric = document.getElementById('rubric').value.trim();
+            const file = paperFileInput.files[0];
+
+            if (!assignmentName) {
+                showError('Please enter an assignment name');
+                return false;
+            }
+
+            if (!rubric) {
+                showError('Please enter a grading rubric');
+                return false;
+            }
+
+            if (!file) {
+                showError('Please upload a paper');
+                return false;
+            }
+
+            return true;
+        }
+
+        // =============== SECTION 4: UI HELPERS ===============
+        function showLoading() {
+            document.getElementById('inputForm').style.display = 'none';
+            document.getElementById('loadingState').style.display = 'block';
+            document.getElementById('resultsSection').classList.remove('active');
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingState').style.display = 'none';
+        }
+
+        function showResults() {
+            document.getElementById('resultsSection').classList.add('active');
+        }
+
+        function showError(message) {
+            const errorDisplay = document.getElementById('errorDisplay');
+            errorDisplay.innerHTML = `<div class="error">❌ ${message}</div>`;
+        }
+
+        function clearError() {
+            document.getElementById('errorDisplay').innerHTML = '';
+        }
+
+        // =============== SECTION 5: GRADING LOGIC ===============
+        async function gradeWithGPT5(assignmentName, rubric, paperContent, isImage = false) {
+            console.log('🚀 Starting grading with GPT-5...');
+
+            let prompt;
+            if (isImage) {
+                prompt = `You are an expert academic grader. Grade the paper/assignment shown in the image based on the provided rubric.
+
+ASSIGNMENT: ${assignmentName}
+
+RUBRIC:
+${rubric}
+
+Please analyze the paper/assignment in the image and provide grading feedback in JSON format:
+{
+    "score": <number between 0-100>,
+    "feedback": "<overall feedback paragraph>",
+    "strengths": "<list of 3-4 main strengths>",
+    "improvements": "<list of 3-4 areas to improve>"
+}
+
+Grade fairly and provide constructive feedback. Respond ONLY with valid JSON.`;
+            } else {
+                // Limit paper content to prevent quota issues
+                const maxLength = 5000;
+                const truncatedContent = paperContent.length > maxLength
+                    ? paperContent.substring(0, maxLength) + "\n[... content truncated ...]"
+                    : paperContent;
+
+                prompt = `You are an expert academic grader. Grade the following paper based on the provided rubric.
+
+ASSIGNMENT: ${assignmentName}
+
+RUBRIC:
+${rubric}
+
+PAPER TO GRADE:
+${truncatedContent}
+
+Provide a JSON response with this exact structure:
+{
+    "score": <number between 0-100>,
+    "feedback": "<overall feedback paragraph>",
+    "strengths": "<list of 3-4 main strengths>",
+    "improvements": "<list of 3-4 areas to improve>"
+}
+
+Grade fairly and provide constructive feedback. Respond ONLY with valid JSON.`;
+            }
+
+            // Try different models in order
+            const models = ["gpt-5-nano", "gpt-5-mini", "gpt-4o-mini"];
+            let lastError = null;
+
+            for (const model of models) {
+                try {
+                    console.log(`📤 Trying model: ${model}...`);
+
+                    let response;
+                    if (isImage) {
+                        // For images, we pass the image as a second parameter
+                        response = await puter.ai.chat(prompt, paperContent, {
+                            model: model
+                        });
+                    } else {
+                        response = await puter.ai.chat(prompt, {
+                            model: model
+                        });
+                    }
+
+                    console.log('📥 Raw response:', response);
+
+                    // Parse the response - handle Puter.js object response
+                    let gradingResult;
+                    let responseText;
+
+                    // Extract text from response object
+                    if (typeof response === 'object' && response.message) {
+                        responseText = response.message.content || response.message;
+                    } else if (typeof response === 'string') {
+                        responseText = response;
+                    } else {
+                        responseText = JSON.stringify(response);
+                    }
+
+                    console.log('📝 Response text:', responseText);
+
+                    // Try to extract JSON from the response text
+                    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+                    if (jsonMatch) {
+                        gradingResult = JSON.parse(jsonMatch[0]);
+                    } else {
+                        gradingResult = JSON.parse(responseText);
+                    }
+
+                    console.log(`✅ Success with model: ${model}`);
+                    return gradingResult;
+
+                } catch (error) {
+                    console.warn(`⚠️ Model ${model} failed:`, error.message);
+                    lastError = error;
+                    // Continue to next model
+                    continue;
+                }
+            }
+
+            // All models failed
+            console.error('❌ All models failed:', lastError);
+            throw new Error(`Grading failed - All models unavailable: ${lastError?.message || 'Unknown error'}`);
+        }
+
+        // =============== SECTION 6: DISPLAY RESULTS ===============
+        function displayResults(assignmentName, gradingResult) {
+            document.getElementById('resultAssignment').textContent = assignmentName;
+            document.getElementById('resultScore').textContent = `${gradingResult.score}/100`;
+            document.getElementById('resultFeedback').textContent = gradingResult.feedback;
+            document.getElementById('resultStrengths').innerHTML = gradingResult.strengths;
+            document.getElementById('resultImprovements').innerHTML = gradingResult.improvements;
+
+            hideLoading();
+            showResults();
+        }
+
+        // =============== SECTION 7: MAIN GRADE BUTTON ===============
+        document.getElementById('gradeBtn').addEventListener('click', async () => {
+            clearError();
+
+            // Validate
+            if (!validateInputs()) {
+                return;
+            }
+
+            showLoading();
+
+            try {
+                const assignmentName = document.getElementById('assignmentName').value.trim();
+                const rubric = document.getElementById('rubric').value.trim();
+                const file = paperFileInput.files[0];
+
+                console.log('📂 Reading file:', file.name);
+
+                let gradingResult;
+                const filename = file.name;
+
+                if (isImageFile(filename)) {
+                    console.log('🖼️ Detected image file, reading as base64...');
+                    const imageData = await readFileAsBase64(file);
+                    console.log('📄 Image data ready, sending to GPT-5...');
+                    gradingResult = await gradeWithGPT5(assignmentName, rubric, imageData, true);
+                } else {
+                    console.log('📝 Detected text file, reading as text...');
+                    const paperContent = await readFileAsText(file);
+                    console.log('📄 Paper content length:', paperContent.length);
+                    gradingResult = await gradeWithGPT5(assignmentName, rubric, paperContent, false);
+                }
+
+                // Display results
+                displayResults(assignmentName, gradingResult);
+
+            } catch (error) {
+                hideLoading();
+                showError(error.message);
+                console.error('Fatal error:', error);
+            }
+        });
+
+        // =============== SECTION 8: RESET BUTTONS ===============
+        document.getElementById('resetBtn').addEventListener('click', () => {
+            document.getElementById('assignmentName').value = '';
+            document.getElementById('rubric').value = '';
+            paperFileInput.value = '';
+            fileNameDisplay.textContent = '';
+            document.getElementById('resultsSection').classList.remove('active');
+            clearError();
+        });
+
+        document.getElementById('gradeAnotherBtn').addEventListener('click', () => {
+            document.getElementById('assignmentName').value = '';
+            document.getElementById('rubric').value = '';
+            paperFileInput.value = '';
+            fileNameDisplay.textContent = '';
+            document.getElementById('resultsSection').classList.remove('active');
+            document.getElementById('inputForm').style.display = 'block';
+            clearError();
+        });
+    </script>
+</body>
+
+</html> -->

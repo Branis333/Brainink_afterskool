@@ -1,6 +1,6 @@
 /**
- * Comprehensive Bottom Tab Navigation Component
- * Full-featured bottom navigation with animations, badges, and proper state management
+ * Modern Bottom Tab Navigation Component
+ * Clean, minimal design matching the screenshots
  */
 
 import React from 'react';
@@ -36,101 +36,95 @@ interface BottomTabsProps {
     activeColor?: string;
     inactiveColor?: string;
     showLabels?: boolean;
-    height?: number;
 }
 
 export const BottomTabs: React.FC<BottomTabsProps> = ({
     activeTab,
     tabs,
-    backgroundColor = '#ffffff',
-    activeColor = '#007AFF',
-    inactiveColor = '#6b7280',
+    backgroundColor = '#FFFFFF',
+    activeColor = '#26D9CA',
+    inactiveColor = '#D1D5DB',
     showLabels = true,
-    height: customHeight
 }) => {
-    const animatedValue = React.useRef(new Animated.Value(0)).current;
-
-    React.useEffect(() => {
-        const activeIndex = tabs.findIndex(tab => tab.id === activeTab);
-        Animated.spring(animatedValue, {
-            toValue: activeIndex,
-            useNativeDriver: true,
-            tension: 100,
-            friction: 8,
-        }).start();
-    }, [activeTab, tabs]);
+    // Find active tab index for dynamic spacing
+    const activeIndex = tabs.findIndex(tab => tab.id === activeTab);
 
     const renderTabItem = (tab: TabItem, index: number) => {
         const isActive = activeTab === tab.id;
         const iconName = isActive && tab.activeIcon ? tab.activeIcon : tab.icon;
+        // sizes increased by ~20%
+        const activeIconSize = 26; // ~22 * 1.2
+        const inactiveIconSize = 24; // ~20 * 1.2
+        const iconSize = isActive ? activeIconSize : inactiveIconSize;
+        // compute a responsive min width for the active pill based on label length and screen width
+        const maxActiveWidth = Math.min(width * 0.44, 200);
+        const estimatedLabelWidth = Math.min(Math.max(tab.label.length * 12 + 32, 80), maxActiveWidth);
+
+        // Calculate dynamic margin based on position relative to active tab
+        let marginLeft = 0;
+        let marginRight = 0;
+
+        if (index < activeIndex) {
+            // Icons to the left of active: shift left by 10%
+            marginRight = width * 0.02;
+        } else if (index > activeIndex) {
+            // Icons to the right of active: shift right by 10%
+            marginLeft = width * 0.02;
+        }
 
         return (
             <TouchableOpacity
                 key={tab.id}
                 style={[
                     styles.tabItem,
-                    { width: width / tabs.length }
+                    isActive ? styles.tabItemActive : styles.tabItemInactive,
+                    { marginLeft, marginRight }
                 ]}
                 onPress={tab.onPress}
-                activeOpacity={0.7}
+                activeOpacity={0.8}
             >
-                <Animated.View style={[
-                    styles.tabContent,
-                    isActive && [styles.activeTabContent, { backgroundColor: `${activeColor}15` }]
-                ]}>
-                    <View style={styles.iconContainer}>
+                {isActive ? (
+                    // Active: show pill with label on the left and larger icon on the right
+                    <View style={[
+                        styles.activeTabWrapper,
+                        { backgroundColor: activeColor, minWidth: estimatedLabelWidth, maxWidth: maxActiveWidth }
+                    ]}>
+                        {showLabels && (
+                            <Text style={styles.activeTabLabel} numberOfLines={1} ellipsizeMode="tail">
+                                {tab.label}
+                            </Text>
+                        )}
                         <Ionicons
                             name={iconName}
-                            size={isActive ? 26 : 24}
-                            color={isActive ? activeColor : inactiveColor}
+                            size={iconSize}
+                            color="#000000"
                         />
-                        {(tab.badge ?? 0) > 0 && (
-                            <View style={[styles.badge, { backgroundColor: '#ff3b30' }]}>
-                                <Text style={styles.badgeText}>
-                                    {tab.badge > 99 ? '99+' : tab.badge.toString()}
-                                </Text>
-                            </View>
-                        )}
                     </View>
-                    {showLabels && (
-                        <Text style={[
-                            styles.tabLabel,
-                            {
-                                color: isActive ? activeColor : inactiveColor,
-                                fontWeight: isActive ? '600' : '500',
-                                fontSize: isActive ? 12 : 11,
-                            }
-                        ]}>
-                            {tab.label}
+                ) : (
+                    // Inactive: icon-only for compactness
+                    <View style={styles.inactiveTabWrapper}>
+                        <Ionicons
+                            name={iconName}
+                            size={iconSize}
+                            color={inactiveColor}
+                        />
+                    </View>
+                )}
+                {(tab.badge ?? 0) > 0 && (
+                    <View style={styles.badge}>
+                        <Text style={styles.badgeText}>
+                            {tab.badge > 99 ? '99+' : tab.badge.toString()}
                         </Text>
-                    )}
-                </Animated.View>
+                    </View>
+                )}
             </TouchableOpacity>
         );
     };
 
-    const indicatorTranslateX = animatedValue.interpolate({
-        inputRange: tabs.map((_, index) => index),
-        outputRange: tabs.map((_, index) => (width / tabs.length) * index + (width / tabs.length - 40) / 2),
-    });
     return (
+        // Use absolute positioning to avoid accidental duplicate stacking from parent layouts
         <SafeAreaView edges={['bottom']} style={[styles.container, { backgroundColor }]}>
-            <View style={[
-                styles.tabBar,
-                { height: customHeight || (showLabels ? 70 : 50) }
-            ]}>
-                {/* Active Tab Indicator */}
-                <Animated.View
-                    style={[
-                        styles.activeIndicator,
-                        {
-                            transform: [{ translateX: indicatorTranslateX }],
-                            backgroundColor: activeColor,
-                        }
-                    ]}
-                />
-
-                {/* Tab Items */}
+            <View style={styles.tabBar} pointerEvents="box-none">
                 {tabs.map(renderTabItem)}
             </View>
         </SafeAreaView>
@@ -139,80 +133,97 @@ export const BottomTabs: React.FC<BottomTabsProps> = ({
 
 const styles = StyleSheet.create({
     container: {
-        backgroundColor: '#ffffff',
-        borderTopWidth: 1,
-        borderTopColor: '#e5e7eb',
+        backgroundColor: '#FFFFFF',
+        borderTopWidth: 0,
         shadowColor: '#000',
         shadowOffset: {
             width: 0,
-            height: -4,
+            height: -1,
         },
-        shadowOpacity: 0.15,
-        shadowRadius: 12,
-        elevation: 16,
-        paddingTop: Platform.OS === 'ios' ? 8 : 12,
+        shadowOpacity: 0.03,
+        shadowRadius: 4,
+        elevation: 4,
+        paddingTop: Platform.OS === 'ios' ? 0 : 4,
+        // Make container overlay at bottom to avoid duplicated bars when parent also renders a bar
+        position: 'absolute',
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 1000,
     },
     tabBar: {
         flexDirection: 'row',
         alignItems: 'center',
+        justifyContent: 'space-evenly',
         paddingHorizontal: 16,
-        position: 'relative',
+        paddingVertical: 8,
+        height: 64, // reduced from 64 to remove extra white space under icons
     },
     tabItem: {
         alignItems: 'center',
         justifyContent: 'center',
+        minWidth: 56,
+    },
+    tabItemActive: {
+        // allow active tab to take more horizontal space
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 4,
+        flex: 2.5,
+    },
+    tabItemInactive: {
+        paddingHorizontal: 4,
+        flex: 1,
+    },
+    activeTabWrapper: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 14,
         paddingVertical: 8,
-        zIndex: 2,
+        borderRadius: 14,
+        gap: 8,
+        minWidth: 80,
     },
-    tabContent: {
+    inactiveTabWrapper: {
+        flexDirection: 'column',
         alignItems: 'center',
         justifyContent: 'center',
+        gap: 2,
         paddingVertical: 6,
-        paddingHorizontal: 12,
-        borderRadius: 16,
-        minHeight: 44,
-    },
-    activeTabContent: {
-        transform: [{ scale: 1.05 }],
-    },
-    iconContainer: {
-        position: 'relative',
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginBottom: 2,
     },
     badge: {
         position: 'absolute',
-        top: -6,
-        right: -8,
-        backgroundColor: '#ff3b30',
-        borderRadius: 10,
-        minWidth: 20,
-        height: 20,
+        top: -4,
+        right: -4,
+        backgroundColor: '#FF3B30',
+        borderRadius: 9,
+        minWidth: 18,
+        height: 18,
         alignItems: 'center',
         justifyContent: 'center',
         paddingHorizontal: 4,
         borderWidth: 2,
-        borderColor: '#ffffff',
+        borderColor: '#FFFFFF',
+        zIndex: 10,
     },
     badgeText: {
-        color: '#ffffff',
-        fontSize: 10,
+        color: '#FFFFFF',
+        fontSize: 9,
         fontWeight: '700',
         textAlign: 'center',
     },
+    activeTabLabel: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#000000',
+        textAlign: 'left',
+        paddingRight: 8,
+    },
     tabLabel: {
+        fontSize: 10,
+        fontWeight: '400',
         textAlign: 'center',
         marginTop: 2,
-        letterSpacing: 0.1,
-    },
-    activeIndicator: {
-        position: 'absolute',
-        bottom: 0,
-        left: 0,
-        height: 3,
-        width: 40,
-        borderRadius: 2,
-        zIndex: 1,
     },
 });

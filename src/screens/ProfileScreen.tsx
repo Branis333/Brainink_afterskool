@@ -17,6 +17,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../context/AuthContext';
 import { profileService, User, UpdateProfileRequest } from '../services/profileService';
 import { afterSchoolService, StudentDashboard, Course } from '../services/afterSchoolService';
@@ -33,17 +34,18 @@ export const ProfileScreen: React.FC<Props> = ({ navigation }) => {
     const [dashboard, setDashboard] = useState<StudentDashboard | null>(null);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [editing, setEditing] = useState(false);
-    const [formData, setFormData] = useState({
-        fname: '',
-        lname: '',
-        email: '',
-        username: '',
-    });
+    // View mode only; editing happens in EditProfile screen
 
     useEffect(() => {
         loadProfile();
     }, []);
+
+    // Refresh when returning to this screen (e.g., after editing)
+    useFocusEffect(
+        React.useCallback(() => {
+            loadProfile(true);
+        }, [])
+    );
 
     const loadProfile = async (isRefresh = false) => {
         if (!token) {
@@ -62,12 +64,7 @@ export const ProfileScreen: React.FC<Props> = ({ navigation }) => {
 
             setProfileData(profile);
             setDashboard(dashboardData);
-            setFormData({
-                fname: profile.fname || '',
-                lname: profile.lname || '',
-                email: profile.email || '',
-                username: profile.username || '',
-            });
+            // No local form state here; display values directly
         } catch (error) {
             console.error('Error loading profile:', error);
             Alert.alert('Error', 'Failed to load profile information');
@@ -82,30 +79,7 @@ export const ProfileScreen: React.FC<Props> = ({ navigation }) => {
         loadProfile(true);
     };
 
-    const handleSaveProfile = async () => {
-        if (!token) return;
-
-        try {
-            setLoading(true);
-
-            const updateData: UpdateProfileRequest = {
-                fname: formData.fname,
-                lname: formData.lname,
-                email: formData.email,
-                username: formData.username,
-            };
-
-            const updatedProfile = await profileService.updateProfile(token, updateData);
-            setProfileData(updatedProfile);
-            setEditing(false);
-            Alert.alert('Success', 'Profile updated successfully!');
-        } catch (error) {
-            console.error('Error updating profile:', error);
-            Alert.alert('Error', 'Failed to update profile');
-        } finally {
-            setLoading(false);
-        }
-    };
+    // Editing handled on EditProfile screen
 
     const handleLogout = () => {
         Alert.alert(
@@ -119,10 +93,16 @@ export const ProfileScreen: React.FC<Props> = ({ navigation }) => {
                     onPress: async () => {
                         try {
                             await profileService.logout();
-                            logout();
                         } catch (error) {
                             console.error('Logout error:', error);
-                            logout(); // Force logout even if API call fails
+                            // Continue with client-side logout regardless
+                        } finally {
+                            logout();
+                            // Reset navigation stack and go to StartUp screen
+                            navigation.reset({
+                                index: 0,
+                                routes: [{ name: 'StartUp' as never }],
+                            });
                         }
                     },
                 },
@@ -174,6 +154,7 @@ export const ProfileScreen: React.FC<Props> = ({ navigation }) => {
         <SafeAreaView style={styles.container}>
             <ScrollView
                 style={styles.scrollView}
+                contentContainerStyle={styles.scrollContent}
                 refreshControl={
                     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
                 }
@@ -183,71 +164,23 @@ export const ProfileScreen: React.FC<Props> = ({ navigation }) => {
                     <Text style={styles.headerTitle}>Profile</Text>
                     <TouchableOpacity
                         style={styles.editButton}
-                        onPress={() => setEditing(!editing)}
+                        onPress={() => navigation.navigate('EditProfile' as never)}
                     >
-                        <Text style={styles.editButtonText}>
-                            {editing ? 'Cancel' : 'Edit'}
-                        </Text>
+                        <Text style={styles.editButtonText}>Edit</Text>
                     </TouchableOpacity>
                 </View>
 
-                {/* Profile Information */}
+                {/* Account Information (read-only) */}
                 <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Personal Information</Text>
-
-                    <View style={styles.inputGroup}>
-                        <Text style={styles.label}>First Name</Text>
-                        <TextInput
-                            style={[styles.input, !editing && styles.inputDisabled]}
-                            value={formData.fname}
-                            onChangeText={(text) => setFormData(prev => ({ ...prev, fname: text }))}
-                            editable={editing}
-                            placeholder="Enter first name"
-                        />
-                    </View>
-
-                    <View style={styles.inputGroup}>
-                        <Text style={styles.label}>Last Name</Text>
-                        <TextInput
-                            style={[styles.input, !editing && styles.inputDisabled]}
-                            value={formData.lname}
-                            onChangeText={(text) => setFormData(prev => ({ ...prev, lname: text }))}
-                            editable={editing}
-                            placeholder="Enter last name"
-                        />
-                    </View>
-
-                    <View style={styles.inputGroup}>
+                    <Text style={styles.sectionTitle}>Account Information</Text>
+                    <View style={styles.readOnlyRow}>
                         <Text style={styles.label}>Username</Text>
-                        <TextInput
-                            style={[styles.input, !editing && styles.inputDisabled]}
-                            value={formData.username}
-                            onChangeText={(text) => setFormData(prev => ({ ...prev, username: text }))}
-                            editable={editing}
-                            placeholder="Enter username"
-                        />
+                        <Text style={styles.valueText}>{profileData?.username || user?.username || '—'}</Text>
                     </View>
-
-                    <View style={styles.inputGroup}>
+                    <View style={styles.readOnlyRow}>
                         <Text style={styles.label}>Email</Text>
-                        <TextInput
-                            style={[styles.input, !editing && styles.inputDisabled]}
-                            value={formData.email}
-                            onChangeText={(text) => setFormData(prev => ({ ...prev, email: text }))}
-                            editable={editing}
-                            placeholder="Enter email"
-                            keyboardType="email-address"
-                        />
+                        <Text style={styles.valueText}>{profileData?.email || user?.email || '—'}</Text>
                     </View>
-
-                    {editing && (
-                        <TouchableOpacity
-                            style={styles.saveButton}
-                            onPress={handleSaveProfile}
-                        >
-                            <Text style={styles.saveButtonText}>Save Changes</Text>
-                        </TouchableOpacity>
-                    )}
                 </View>
 
                 {/* Account Status */}
@@ -337,6 +270,9 @@ const styles = StyleSheet.create({
     scrollView: {
         flex: 1,
     },
+    scrollContent: {
+        paddingBottom: 120,
+    },
     loadingContainer: {
         flex: 1,
         justifyContent: 'center',
@@ -385,6 +321,19 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         color: '#1a1a1a',
         marginBottom: 16,
+    },
+    readOnlyRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        paddingVertical: 8,
+        borderBottomWidth: 1,
+        borderBottomColor: '#f3f4f6',
+    },
+    valueText: {
+        fontSize: 16,
+        color: '#1f2937',
+        fontWeight: '500',
     },
     inputGroup: {
         marginBottom: 16,

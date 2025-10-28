@@ -9,11 +9,12 @@ import {
     ActivityIndicator,
     Dimensions,
     Modal,
-    Image
+    Image,
+    RefreshControl
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../navigation/AppNavigatorNew';
 import { useAuth } from '../../context/AuthContext';
@@ -32,6 +33,7 @@ export const GradeDetailsScreen: React.FC = () => {
     const { token } = useAuth();
 
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const [submission, setSubmission] = useState<AISubmission | null>(null);
     const [showFeedbackModal, setShowFeedbackModal] = useState(false);
     const [activeTab, setActiveTab] = useState<'overview' | 'feedback' | 'improvements'>('overview');
@@ -69,18 +71,29 @@ export const GradeDetailsScreen: React.FC = () => {
         return t;
     }, []);
 
-    useEffect(() => {
-        loadSubmissionDetails();
-    }, [submissionId]);
+    // Auto-refresh when screen comes into focus (ensures latest grades are shown)
+    useFocusEffect(
+        useCallback(() => {
+            loadSubmissionDetails();
+        }, [submissionId, token])
+    );
 
-    const loadSubmissionDetails = async () => {
+    // Optional: Keep previous useEffect for initial mount
+    useEffect(() => {
+        if (!token) return;
+        loadSubmissionDetails();
+    }, []);
+
+    const loadSubmissionDetails = async (isRefresh = false) => {
         if (!token) {
             Alert.alert('Error', 'Please log in to view submission details');
             return;
         }
 
         try {
-            setLoading(true);
+            if (!isRefresh) setLoading(true);
+
+            // Always fetch fresh data from server (no caching)
             const submissionData = await gradesService.getAISubmission(submissionId, token);
             setSubmission(submissionData);
 
@@ -122,7 +135,13 @@ export const GradeDetailsScreen: React.FC = () => {
             navigation.goBack();
         } finally {
             setLoading(false);
+            setRefreshing(false);
         }
+    };
+
+    const onRefresh = () => {
+        setRefreshing(true);
+        loadSubmissionDetails(true);
     };
 
     const getSubmissionIcon = (type: string) => {
@@ -345,7 +364,18 @@ export const GradeDetailsScreen: React.FC = () => {
                         <View style={styles.strengthsContent}>
                             <Ionicons name="checkmark-circle" size={20} color="#10B981" />
                             <Text style={styles.strengthsText}>
-                                {submission.ai_strengths}
+                                {(() => {
+                                    try {
+                                        // Parse JSON array from database
+                                        const strengths = JSON.parse(submission.ai_strengths);
+                                        if (Array.isArray(strengths)) {
+                                            return strengths.map((s, i) => `${i + 1}. ${s}`).join('\n');
+                                        }
+                                    } catch {
+                                        // Fallback to displaying as-is if not valid JSON
+                                    }
+                                    return submission.ai_strengths;
+                                })()}
                             </Text>
                         </View>
                     </View>
@@ -357,7 +387,18 @@ export const GradeDetailsScreen: React.FC = () => {
                         <View style={styles.correctionsContent}>
                             <Ionicons name="alert-circle" size={20} color="#F59E0B" />
                             <Text style={styles.correctionsText}>
-                                {submission.ai_corrections}
+                                {(() => {
+                                    try {
+                                        // Parse JSON array from database
+                                        const corrections = JSON.parse(submission.ai_corrections);
+                                        if (Array.isArray(corrections)) {
+                                            return corrections.map((c, i) => `${i + 1}. ${c}`).join('\n');
+                                        }
+                                    } catch {
+                                        // Fallback to displaying as-is if not valid JSON
+                                    }
+                                    return submission.ai_corrections;
+                                })()}
                             </Text>
                         </View>
                     </View>
@@ -377,7 +418,18 @@ export const GradeDetailsScreen: React.FC = () => {
                         <View style={styles.improvementsContent}>
                             <Ionicons name="bulb" size={20} color="#8B5CF6" />
                             <Text style={styles.improvementsText}>
-                                {submission.ai_improvements}
+                                {(() => {
+                                    try {
+                                        // Parse JSON array from database
+                                        const improvements = JSON.parse(submission.ai_improvements);
+                                        if (Array.isArray(improvements)) {
+                                            return improvements.map((imp, i) => `${i + 1}. ${imp}`).join('\n');
+                                        }
+                                    } catch {
+                                        // Fallback to displaying as-is if not valid JSON
+                                    }
+                                    return submission.ai_improvements;
+                                })()}
                             </Text>
                         </View>
                     </View>
@@ -558,7 +610,17 @@ export const GradeDetailsScreen: React.FC = () => {
                 </TouchableOpacity>
             </View>
 
-            <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+            <ScrollView
+                style={styles.content}
+                showsVerticalScrollIndicator={false}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={refreshing}
+                        onRefresh={onRefresh}
+                        tintColor="#3B82F6"
+                    />
+                }
+            >
                 {activeTab === 'overview' && renderOverviewTab()}
                 {activeTab === 'feedback' && renderFeedbackTab()}
                 {activeTab === 'improvements' && renderImprovementsTab()}

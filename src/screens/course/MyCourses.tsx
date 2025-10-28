@@ -1,10 +1,10 @@
 /**
- * Course Search/Browse Screen
- * Browse available courses, filter by subject/difficulty, and enroll in new courses
- * Grid layout with image placeholders matching design
+ * My Courses Screen
+ * Display enrolled courses with In Progress and Completed filters
+ * Grid layout matching the search screen design
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
     View,
     Text,
@@ -14,9 +14,7 @@ import {
     RefreshControl,
     Alert,
     ActivityIndicator,
-    TextInput,
     Dimensions,
-    FlatList,
     Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -26,9 +24,8 @@ import { useAuth } from '../../context/AuthContext';
 import {
     afterSchoolService,
     Course,
-    CourseFilters,
-    CourseListResponse,
-    StudentAssignment
+    StudentAssignment,
+    StudentProgress
 } from '../../services/afterSchoolService';
 import { TabBarWrapper } from '../../components/TabBarWrapper';
 import { Ionicons } from '@expo/vector-icons';
@@ -39,12 +36,14 @@ interface Props {
     navigation: NavigationProp;
 }
 
+type CourseFilter = 'in-progress' | 'completed';
+
 const { width } = Dimensions.get('window');
 const GRID_COLS = 2;
 const GRID_MARGIN = 20;
-const CARD_WIDTH = (width - GRID_MARGIN * 2 - 12) / GRID_COLS; // 12 is gap between columns
+const CARD_WIDTH = (width - GRID_MARGIN * 2 - 12) / GRID_COLS;
 
-// Color palette for course placeholders
+// Color palette for course placeholders (same as search screen)
 const PLACEHOLDER_COLORS = [
     '#FFB366', // Orange
     '#66B2FF', // Blue
@@ -56,7 +55,7 @@ const PLACEHOLDER_COLORS = [
     '#FFFF99', // Yellow
 ];
 
-// Subject to icon mapping
+// Subject to icon mapping (same as search screen)
 const SUBJECT_ICONS: { [key: string]: string } = {
     'English': 'book',
     'Math': 'calculator',
@@ -69,64 +68,18 @@ const SUBJECT_ICONS: { [key: string]: string } = {
     'default': 'school'
 };
 
-export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
+export const MyCoursesScreen: React.FC<Props> = ({ navigation }) => {
     const { token } = useAuth();
 
     const [courses, setCourses] = useState<Course[]>([]);
+    const [courseProgress, setCourseProgress] = useState<{ [key: number]: StudentProgress }>({});
     const [courseAssignments, setCourseAssignments] = useState<{ [key: number]: StudentAssignment[] }>({});
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [searchText, setSearchText] = useState('');
-    const [selectedSubject, setSelectedSubject] = useState<string>('');
-    const [selectedDifficulty, setSelectedDifficulty] = useState<string>('');
-    const [selectedAgeRange, setSelectedAgeRange] = useState<string>('');
-    const [sortBy, setSortBy] = useState<'title' | 'created_at' | 'difficulty'>('title');
-    const [showFilters, setShowFilters] = useState(false);
+    const [selectedFilter, setSelectedFilter] = useState<CourseFilter>('in-progress');
 
-    // Available filter options
-    const subjects = afterSchoolService.getAvailableSubjects();
-    const difficulties = afterSchoolService.getAvailableDifficultyLevels();
-    const ageRanges = [
-        { label: 'Early (3-6 years)', value: 'early' },
-        { label: 'Middle (7-10 years)', value: 'middle' },
-        { label: 'Late (11-16 years)', value: 'late' }
-    ];
-    const sortOptions = [
-        { label: 'Title A-Z', value: 'title' },
-        { label: 'Newest First', value: 'created_at' },
-        { label: 'Difficulty', value: 'difficulty' }
-    ];
-
-    // Build filters for API call
-    const buildFilters = (): CourseFilters => {
-        const filters: CourseFilters = {
-            active_only: true,
-            sort_by: sortBy,
-            sort_order: 'asc',
-            limit: 50
-        };
-
-        if (searchText.trim()) {
-            filters.search = searchText.trim();
-        }
-
-        if (selectedSubject) {
-            filters.subject = selectedSubject;
-        }
-
-        if (selectedDifficulty) {
-            filters.difficulty = selectedDifficulty as 'beginner' | 'intermediate' | 'advanced';
-        }
-
-        if (selectedAgeRange) {
-            filters.age_range = selectedAgeRange as 'early' | 'middle' | 'late';
-        }
-
-        return filters;
-    };
-
-    // Load courses with filters
-    const loadCourses = async (isRefresh: boolean = false) => {
+    // Load enrolled courses with progress
+    const loadMyCourses = async (isRefresh: boolean = false) => {
         try {
             if (!isRefresh) setLoading(true);
 
@@ -134,34 +87,44 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
                 throw new Error('No authentication token available');
             }
 
-            const filters = buildFilters();
-            const response = await afterSchoolService.listCourses(token, filters);
-            setCourses(response.courses);
+            // Get student dashboard which includes enrolled courses
+            // My Courses should only show truly enrolled courses via dedicated endpoint
+            const dashboard = await afterSchoolService.getMyCourses(token);
+            let enrolledCourses = dashboard.active_courses || [];
 
-            // Load assignment data for enrolled courses
-            const assignmentPromises = response.courses
-                .filter(course => course.id) // Only for courses we might be enrolled in
-                .map(async (course) => {
-                    try {
-                        const assignments = await afterSchoolService.getCourseAssignments(course.id, token);
-                        return { courseId: course.id, assignments };
-                    } catch (error) {
-                        // Silently handle cases where user isn't enrolled or no assignments exist
-                        return { courseId: course.id, assignments: [] };
-                    }
+            // Build progress map from dashboard summary
+            const progressMap: { [key: number]: StudentProgress } = {};
+            if (dashboard.progress_summary) {
+                dashboard.progress_summary.forEach(progress => {
+                    progressMap[progress.course_id] = progress;
                 });
+            }
 
-            const assignmentResults = await Promise.all(assignmentPromises);
+            // Load assignments for each course
             const assignmentMap: { [key: number]: StudentAssignment[] } = {};
-            assignmentResults.forEach(({ courseId, assignments }) => {
-                assignmentMap[courseId] = assignments;
-            });
+            for (const course of enrolledCourses) {
+                try {
+                    // Get course assignments
+                    const assignments = await afterSchoolService.getCourseAssignments(course.id, token);
+                    assignmentMap[course.id] = assignments;
+                } catch (error) {
+                    // Silently handle errors for individual courses
+                    console.error(`Error loading assignments for course ${course.id}:`, error);
+                }
+            }
+
+            // Safety: filter out any course with zero student assignments
+            // (in case backend state is inconsistent)
+            enrolledCourses = enrolledCourses.filter(c => (assignmentMap[c.id]?.length || 0) > 0);
+
+            setCourses(enrolledCourses);
+            setCourseProgress(progressMap);
             setCourseAssignments(assignmentMap);
         } catch (error) {
-            console.error('Error loading courses:', error);
+            console.error('Error loading enrolled courses:', error);
             Alert.alert(
                 'Error',
-                'Failed to load courses. Please try again.',
+                'Failed to load your courses. Please try again.',
                 [{ text: 'OK' }]
             );
         } finally {
@@ -170,17 +133,17 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
         }
     };
 
-    // Load data on screen focus and when filters change
+    // Load data on screen focus
     useFocusEffect(
         useCallback(() => {
-            loadCourses();
-        }, [token, searchText, selectedSubject, selectedDifficulty, selectedAgeRange, sortBy])
+            loadMyCourses();
+        }, [token])
     );
 
     // Pull to refresh
     const onRefresh = useCallback(() => {
         setRefreshing(true);
-        loadCourses(true);
+        loadMyCourses(true);
     }, []);
 
     // Navigate to course details
@@ -191,21 +154,16 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
         });
     };
 
-    // Navigate directly to course assignment workflow
-    const navigateToCourseAssignment = (course: Course, assignment: StudentAssignment) => {
-        navigation.navigate('CourseAssignment', {
-            courseId: course.id,
-            assignmentId: assignment.assignment_id,
-            assignmentTitle: `Assignment ${assignment.assignment_id}`
-        });
+    // Get completion percentage for a course
+    const getCourseCompletion = (courseId: number): number => {
+        const progress = courseProgress[courseId];
+        if (!progress) return 0;
+        return progress.completion_percentage || 0;
     };
 
-    // Navigate to course progress
-    const navigateToCourseProgress = (course: Course) => {
-        navigation.navigate('CourseProgress', {
-            courseId: course.id,
-            courseTitle: course.title
-        });
+    // Check if course is completed
+    const isCourseCompleted = (courseId: number): boolean => {
+        return getCourseCompletion(courseId) >= 100;
     };
 
     // Get assignment status for display
@@ -218,44 +176,18 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
         return { total: assignments.length, assigned, submitted, graded };
     };
 
-    // Clear all filters
-    const clearFilters = () => {
-        setSearchText('');
-        setSelectedSubject('');
-        setSelectedDifficulty('');
-        setSelectedAgeRange('');
-        setSortBy('title');
-    };
+    // Filter courses based on selected filter
+    const getFilteredCourses = (): Course[] => {
+        return courses.filter(course => {
+            const isCompleted = isCourseCompleted(course.id);
 
-    // Get active filter count
-    const getActiveFilterCount = (): number => {
-        let count = 0;
-        if (searchText.trim()) count++;
-        if (selectedSubject) count++;
-        if (selectedDifficulty) count++;
-        if (selectedAgeRange) count++;
-        return count;
-    };
-
-    // Render search header
-    const renderSearchHeader = () => (
-        <View style={styles.searchHeader}>
-            <View style={styles.searchContainer}>
-                <Ionicons name="search" size={18} color="#999" />
-                <TextInput
-                    style={styles.searchInput}
-                    placeholder="Search courses..."
-                    placeholderTextColor="#999"
-                    value={searchText}
-                    onChangeText={setSearchText}
-                />
-            </View>
-        </View>
-    );
-
-    // Render filters panel (simplified for grid layout)
-    const renderFiltersPanel = () => {
-        return null; // Filters not needed for grid view - search is sufficient
+            if (selectedFilter === 'completed') {
+                return isCompleted;
+            } else {
+                // in-progress: not completed
+                return !isCompleted;
+            }
+        });
     };
 
     // Get placeholder color based on course ID
@@ -274,6 +206,7 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
         const placeholderColor = getPlaceholderColor(course.id);
         const subjectIcon = getSubjectIcon(course.subject);
         const assignmentStatus = getAssignmentStatus(course);
+        const completion = getCourseCompletion(course.id);
 
         return (
             <TouchableOpacity
@@ -284,11 +217,19 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
             >
                 {/* Image - Display actual image if available, otherwise placeholder */}
                 {course.image ? (
-                    <Image
-                        source={{ uri: `data:image/jpeg;base64,${course.image}` }}
-                        style={styles.coursePlaceholder}
-                        resizeMode="cover"
-                    />
+                    <View style={styles.imagePlaceholderContainer}>
+                        <Image
+                            source={{ uri: `data:image/jpeg;base64,${course.image}` }}
+                            style={styles.coursePlaceholder}
+                            resizeMode="cover"
+                        />
+                        {/* Completion Badge */}
+                        {completion >= 100 && (
+                            <View style={styles.completionBadge}>
+                                <Ionicons name="checkmark-circle" size={24} color="#4CAF50" />
+                            </View>
+                        )}
+                    </View>
                 ) : (
                     <View
                         style={[
@@ -301,6 +242,12 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
                             size={48}
                             color="rgba(255, 255, 255, 0.7)"
                         />
+                        {/* Completion Badge */}
+                        {completion >= 100 && (
+                            <View style={styles.completionBadge}>
+                                <Ionicons name="checkmark-circle" size={24} color="#4CAF50" />
+                            </View>
+                        )}
                     </View>
                 )}
 
@@ -313,16 +260,20 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
                         {course.subject}
                     </Text>
 
-                    {/* Difficulty & Age Badge */}
-                    <View style={styles.courseGridMeta}>
-                        <View style={styles.difficultyBadge}>
-                            <Text style={styles.difficultyBadgeText}>
-                                {course.difficulty_level.charAt(0).toUpperCase() + course.difficulty_level.slice(1)}
-                            </Text>
+                    {/* Progress Bar */}
+                    <View style={styles.progressContainer}>
+                        <View style={styles.progressBar}>
+                            <View
+                                style={[
+                                    styles.progressFill,
+                                    { width: `${completion}%` }
+                                ]}
+                            />
                         </View>
+                        <Text style={styles.progressText}>{Math.round(completion)}%</Text>
                     </View>
 
-                    {/* Stats if enrolled */}
+                    {/* Stats if has assignments */}
                     {assignmentStatus.total > 0 && (
                         <View style={styles.courseGridStats}>
                             <View style={styles.statItem}>
@@ -340,12 +291,14 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
                         </View>
                     )}
 
-                    {/* View Button */}
+                    {/* Continue Button */}
                     <TouchableOpacity
                         style={styles.courseGridViewButton}
                         onPress={() => navigateToCourse(course)}
                     >
-                        <Text style={styles.courseGridViewButtonText}>View</Text>
+                        <Text style={styles.courseGridViewButtonText}>
+                            {completion >= 100 ? 'Review' : 'Continue'}
+                        </Text>
                     </TouchableOpacity>
                 </View>
             </TouchableOpacity>
@@ -355,43 +308,64 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
     // Render loading state
     if (loading) {
         return (
-            <SafeAreaView style={styles.container}>
-                <View style={styles.header}>
-                    <TouchableOpacity
-                        style={styles.backButton}
-                        onPress={() => navigation.goBack()}
-                    >
-                        <Text style={styles.backButtonText}>← Back</Text>
-                    </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Browse Courses</Text>
-                </View>
-                <View style={styles.loadingContainer}>
-                    <ActivityIndicator size="large" color="#007AFF" />
-                    <Text style={styles.loadingText}>Loading courses...</Text>
-                </View>
-            </SafeAreaView>
+            <TabBarWrapper activeTab="courses" showTabs={true}>
+                <SafeAreaView style={styles.container}>
+                    <View style={styles.header}>
+                        <Text style={styles.headerTitle}>My Courses</Text>
+                    </View>
+                    <View style={styles.loadingContainer}>
+                        <ActivityIndicator size="large" color="#007AFF" />
+                        <Text style={styles.loadingText}>Loading your courses...</Text>
+                    </View>
+                </SafeAreaView>
+            </TabBarWrapper>
         );
     }
 
-    const filteredCourses = courses.filter(course => {
-        const matchesSearch = !searchText.trim() ||
-            course.title.toLowerCase().includes(searchText.toLowerCase()) ||
-            course.subject.toLowerCase().includes(searchText.toLowerCase());
-        return matchesSearch;
-    });
+    const filteredCourses = getFilteredCourses();
 
     return (
         <TabBarWrapper activeTab="courses" showTabs={true}>
             <SafeAreaView style={styles.container}>
                 {/* Header */}
                 <View style={styles.header}>
+                    <Text style={styles.headerTitle}>My Courses</Text>
+                </View>
+
+                {/* Filter Buttons */}
+                <View style={styles.filterButtonsContainer}>
                     <TouchableOpacity
-                        style={styles.backButton}
-                        onPress={() => navigation.goBack()}
+                        style={[
+                            styles.filterTab,
+                            selectedFilter === 'in-progress' && styles.filterTabActive
+                        ]}
+                        onPress={() => setSelectedFilter('in-progress')}
                     >
-                        <Text style={styles.backButtonText}>← Back</Text>
+                        <Text
+                            style={[
+                                styles.filterTabText,
+                                selectedFilter === 'in-progress' && styles.filterTabTextActive
+                            ]}
+                        >
+                            In Progress
+                        </Text>
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Browse Courses</Text>
+                    <TouchableOpacity
+                        style={[
+                            styles.filterTab,
+                            selectedFilter === 'completed' && styles.filterTabActive
+                        ]}
+                        onPress={() => setSelectedFilter('completed')}
+                    >
+                        <Text
+                            style={[
+                                styles.filterTabText,
+                                selectedFilter === 'completed' && styles.filterTabTextActive
+                            ]}
+                        >
+                            Completed
+                        </Text>
+                    </TouchableOpacity>
                 </View>
 
                 <ScrollView
@@ -400,46 +374,35 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
                     refreshControl={
                         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
                     }
-                    stickyHeaderIndices={[0]}
                 >
-                    {/* Search Header */}
-                    <View style={styles.stickySearchHeader}>
-                        <View style={styles.searchHeader}>
-                            <View style={styles.searchContainer}>
-                                <Ionicons name="search" size={18} color="#999" />
-                                <TextInput
-                                    style={styles.searchInput}
-                                    placeholder="Search courses..."
-                                    placeholderTextColor="#999"
-                                    value={searchText}
-                                    onChangeText={setSearchText}
-                                />
-                            </View>
-                            <TouchableOpacity
-                                style={styles.filterButton}
-                                onPress={() => setShowFilters(!showFilters)}
-                            >
-                                <Ionicons name="funnel" size={18} color="#fff" />
-                            </TouchableOpacity>
-                        </View>
-                    </View>
-
                     {/* Content */}
                     <View style={styles.contentContainer}>
                         {/* Results Summary */}
                         <View style={styles.resultsSummary}>
                             <Text style={styles.resultsText}>
-                                {filteredCourses.length} course{filteredCourses.length !== 1 ? 's' : ''} found
+                                {filteredCourses.length} course{filteredCourses.length !== 1 ? 's' : ''}
                             </Text>
                         </View>
 
                         {/* Grid Layout */}
                         {filteredCourses.length === 0 ? (
                             <View style={styles.emptyContainer}>
-                                <Ionicons name="search" size={48} color="#ddd" />
-                                <Text style={styles.emptyText}>No courses found</Text>
+                                <Ionicons
+                                    name={selectedFilter === 'completed' ? 'checkmark-done-circle-outline' : 'school-outline'}
+                                    size={64}
+                                    color="#ddd"
+                                />
+                                <Text style={styles.emptyText}>
+                                    {selectedFilter === 'completed'
+                                        ? 'No completed courses yet'
+                                        : 'No courses in progress'
+                                    }
+                                </Text>
                                 <Text style={styles.emptySubtext}>
-                                    Try adjusting your search terms
+                                    {selectedFilter === 'completed'
+                                        ? 'Complete your first course to see it here'
+                                        : 'Start learning to see your progress'
+                                    }
                                 </Text>
                             </View>
                         ) : (
@@ -465,24 +428,17 @@ const styles = StyleSheet.create({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
+        justifyContent: 'center',
         paddingHorizontal: 20,
         paddingVertical: 16,
         backgroundColor: '#fff',
         borderBottomWidth: 1,
         borderBottomColor: '#e0e0e0',
     },
-    backButton: {
-        marginRight: 16,
-    },
-    backButtonText: {
-        fontSize: 16,
-        color: '#007AFF',
-    },
     headerTitle: {
-        fontSize: 18,
+        fontSize: 20,
         fontWeight: 'bold',
         color: '#1a1a1a',
-        flex: 1,
     },
     loadingContainer: {
         flex: 1,
@@ -495,41 +451,33 @@ const styles = StyleSheet.create({
         fontSize: 16,
         color: '#666',
     },
-    stickySearchHeader: {
-        backgroundColor: '#f8f9fa',
-    },
-    searchHeader: {
+    filterButtonsContainer: {
+        flexDirection: 'row',
         backgroundColor: '#fff',
         paddingHorizontal: 20,
         paddingVertical: 12,
+        gap: 12,
         borderBottomWidth: 1,
         borderBottomColor: '#e0e0e0',
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
     },
-    searchContainer: {
+    filterTab: {
         flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
+        paddingVertical: 10,
+        paddingHorizontal: 16,
         backgroundColor: '#f0f0f0',
-        borderRadius: 20,
-        paddingHorizontal: 14,
-        height: 40,
-        gap: 8,
-    },
-    searchInput: {
-        flex: 1,
-        fontSize: 16,
-        color: '#333',
-    },
-    filterButton: {
-        width: 44,
-        height: 44,
-        backgroundColor: '#007AFF',
-        borderRadius: 22,
-        justifyContent: 'center',
+        borderRadius: 8,
         alignItems: 'center',
+    },
+    filterTabActive: {
+        backgroundColor: '#007AFF',
+    },
+    filterTabText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#666',
+    },
+    filterTabTextActive: {
+        color: '#fff',
     },
     contentContainer: {
         paddingHorizontal: 20,
@@ -557,6 +505,7 @@ const styles = StyleSheet.create({
     },
     emptyText: {
         fontSize: 16,
+        fontWeight: '600',
         color: '#666',
         marginTop: 16,
         marginBottom: 8,
@@ -566,7 +515,6 @@ const styles = StyleSheet.create({
         color: '#999',
         textAlign: 'center',
     },
-
     // Grid Card Styles
     courseGridCard: {
         backgroundColor: '#fff',
@@ -577,12 +525,28 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.08,
         shadowRadius: 4,
         elevation: 2,
+        marginBottom: 12,
     },
     coursePlaceholder: {
         width: '100%',
         height: 140,
         justifyContent: 'center',
         alignItems: 'center',
+        position: 'relative',
+    },
+    imagePlaceholderContainer: {
+        width: '100%',
+        height: 140,
+        position: 'relative',
+        overflow: 'hidden',
+    },
+    completionBadge: {
+        position: 'absolute',
+        top: 8,
+        right: 8,
+        backgroundColor: '#fff',
+        borderRadius: 20,
+        padding: 4,
     },
     courseGridInfo: {
         padding: 12,
@@ -600,21 +564,30 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         marginBottom: 8,
     },
-    courseGridMeta: {
+    progressContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
         marginBottom: 8,
+        gap: 8,
     },
-    difficultyBadge: {
+    progressBar: {
+        flex: 1,
+        height: 6,
         backgroundColor: '#f0f0f0',
-        paddingHorizontal: 8,
-        paddingVertical: 4,
-        borderRadius: 6,
-        alignSelf: 'flex-start',
+        borderRadius: 3,
+        overflow: 'hidden',
     },
-    difficultyBadgeText: {
+    progressFill: {
+        height: '100%',
+        backgroundColor: '#007AFF',
+        borderRadius: 3,
+    },
+    progressText: {
         fontSize: 10,
         fontWeight: '600',
-        color: '#666',
-        textTransform: 'capitalize',
+        color: '#007AFF',
+        minWidth: 32,
+        textAlign: 'right',
     },
     courseGridStats: {
         flexDirection: 'row',

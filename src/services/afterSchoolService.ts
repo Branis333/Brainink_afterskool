@@ -32,6 +32,7 @@ export interface CourseUpdate {
     age_max?: number;
     difficulty_level?: 'beginner' | 'intermediate' | 'advanced';
     is_active?: boolean;
+    image?: string; // Base64 encoded image
 }
 
 export interface Course {
@@ -44,6 +45,9 @@ export interface Course {
     difficulty_level: string;
     created_by: number;
     is_active: boolean;
+
+    // Course image - base64 encoded
+    image?: string | null;
 
     // Enhanced course structure fields
     total_weeks: number;
@@ -290,26 +294,43 @@ export interface StudentDashboard {
 
 // Assignment Grading Interfaces - Updated to match backend response structure
 export interface AssignmentGradeResult {
+    status: 'success' | 'ready' | string;
+    message: string;
     assignment: {
         id: number;
         title: string;
-        description: string;
-        points: number;
-        due_date: number;
+        type?: string;
+        description?: string;
+        points?: number;
     };
+    grade_result: {
+        score?: number | null;
+        percentage?: number | null;
+        grade_letter?: string | null;
+        overall_feedback?: string | null;
+        detailed_feedback?: string | null;
+        strengths?: string[] | string | null;
+        improvements?: string[] | string | null;
+        recommendations?: string[] | string | null;
+        normalized?: any;
+        passing_grade: boolean;
+        required_percentage: number;
+    } | null;
     student_assignment: {
         id: number;
         status: 'assigned' | 'submitted' | 'graded' | 'overdue' | 'passed' | 'needs_retry' | 'failed';
-        grade: number;
-        submitted_at?: string;
-        feedback?: string;
+        grade: number | null;
+        submitted_at?: string | null;
+        feedback?: string | null;
+        graded_by?: string | null;
+        submission_id?: number | null;
+        attempts_used?: number;
+        can_retry?: boolean;
+        attempts_remaining?: number;
     };
-    grade_response: {
-        assignment_id: number;
-        ai_score: number;
-        feedback: string;
-        detailed_feedback: any;
-        passed: boolean;
+    processed_at: string;
+    retry_info?: {
+        is_retry_attempt: boolean;
         attempts_used: number;
         attempts_remaining: number;
     };
@@ -319,21 +340,23 @@ export interface AssignmentStatus {
     assignment: {
         id: number;
         title: string;
-        description: string;
-        points: number;
+        description?: string | null;
+        points?: number | null;
         required_percentage: number;
     };
     student_assignment: {
         id: number;
         status: 'assigned' | 'submitted' | 'graded' | 'overdue' | 'passed' | 'needs_retry' | 'failed';
         grade: number;
-        submitted_at?: string;
-        feedback?: string;
+        submitted_at?: string | null;
+        feedback?: string | null;
+        submission_id?: number | null;
     };
     attempts_info: {
         attempts_used: number;
         attempts_remaining: number;
         can_retry: boolean;
+        latest_submission_at?: string | null;
     };
     message: string;
     passing_grade: boolean;
@@ -371,6 +394,13 @@ export interface AIGradingResponse {
     ai_strengths?: string;
     ai_improvements?: string;
     processed_at: string;
+}
+
+// Response for the simplified "one assignment" picker
+export interface OneAssignmentResponse {
+    assignment: CourseAssignment;
+    student_status?: AssignmentStatus | null;
+    is_assigned: boolean;
 }
 
 // Course Filtering Options
@@ -417,6 +447,7 @@ export type StudySessionMarkDoneResponse = StudySession;
 
 class AfterSchoolService {
     private dashboardInFlight: Promise<StudentDashboard> | null = null;
+    private dashboardInFlightKey: string | null = null;
     /**
      * Enhanced error handler with specific error types and user-friendly messages
      */
@@ -751,6 +782,100 @@ class AfterSchoolService {
         }
     }
 
+    /**
+     * Create a course with an image
+     */
+    async createCourseWithImage(
+        courseData: CourseCreate,
+        imageFile: { uri: string; name: string; type: string },
+        token: string
+    ): Promise<Course> {
+        try {
+            console.log('📚 Creating course with image:', courseData.title);
+
+            const formData = new FormData();
+            formData.append('title', courseData.title);
+            formData.append('subject', courseData.subject);
+            formData.append('description', courseData.description || '');
+            formData.append('age_min', courseData.age_min.toString());
+            formData.append('age_max', courseData.age_max.toString());
+            formData.append('difficulty_level', courseData.difficulty_level);
+
+            // Append image file
+            if (imageFile) {
+                formData.append('image_file', {
+                    uri: imageFile.uri,
+                    name: imageFile.name,
+                    type: imageFile.type,
+                } as any);
+            }
+
+            const response = await fetch(`${getBackendUrl()}/after-school/courses/with-image`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    // FormData will set the Content-Type header automatically
+                },
+                body: formData,
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'Failed to create course with image');
+            }
+
+            const data = await response.json();
+            console.log('✅ Course created with image:', data);
+            return data;
+        } catch (error) {
+            console.error('❌ Error creating course with image:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Update course image
+     */
+    async updateCourseImage(
+        courseId: number,
+        imageFile: { uri: string; name: string; type: string },
+        token: string
+    ): Promise<Course> {
+        try {
+            console.log('📸 Updating course image for course ID:', courseId);
+
+            const formData = new FormData();
+
+            // Append image file
+            formData.append('image_file', {
+                uri: imageFile.uri,
+                name: imageFile.name,
+                type: imageFile.type,
+            } as any);
+
+            const response = await fetch(`${getBackendUrl()}/after-school/courses/${courseId}/image`, {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    // FormData will set the Content-Type header automatically
+                },
+                body: formData,
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'Failed to update course image');
+            }
+
+            const data = await response.json();
+            console.log('✅ Course image updated:', data);
+            return data;
+        } catch (error) {
+            console.error('❌ Error updating course image:', error);
+            throw error;
+        }
+    }
+
     // ===============================
     // LESSON MANAGEMENT METHODS
     // ===============================
@@ -879,17 +1004,24 @@ class AfterSchoolService {
     /**
      * Get comprehensive student dashboard
      */
-    async getStudentDashboard(token: string): Promise<StudentDashboard> {
-        if (this.dashboardInFlight) {
+    async getStudentDashboard(
+        token: string,
+        options: { includeAllIfEmpty?: boolean; limit?: number; requireEnrolled?: boolean } = {}
+    ): Promise<StudentDashboard> {
+        const key = JSON.stringify({ includeAllIfEmpty: options.includeAllIfEmpty ?? false, limit: options.limit ?? 50, requireEnrolled: options.requireEnrolled ?? false });
+        if (this.dashboardInFlight && this.dashboardInFlightKey === key) {
             return this.dashboardInFlight; // Reuse existing call
         }
+        this.dashboardInFlightKey = key;
         this.dashboardInFlight = this.retryApiCall(async () => {
             try {
                 console.log('📊 Fetching student dashboard...');
-                const response = await this.makeAuthenticatedRequest(
-                    '/after-school/courses/dashboard',
-                    token
-                );
+                const params = new URLSearchParams();
+                if (options.limit !== undefined) {
+                    params.append('limit', String(options.limit));
+                }
+                const endpoint = `/after-school/courses/dashboard${params.toString() ? `?${params.toString()}` : ''}`;
+                const response = await this.makeAuthenticatedRequest(endpoint, token);
                 const data = await response.json();
                 console.log('✅ Student dashboard fetched successfully');
                 return data;
@@ -897,9 +1029,28 @@ class AfterSchoolService {
                 throw this.handleApiError(error, 'Error fetching student dashboard');
             } finally {
                 this.dashboardInFlight = null;
+                this.dashboardInFlightKey = null;
             }
         });
         return this.dashboardInFlight;
+    }
+
+    /**
+     * Get 'My Courses' (enrolled-only) with progress summary
+     */
+    async getMyCourses(token: string): Promise<StudentDashboard> {
+        try {
+            console.log('📚 Fetching MY COURSES (enrolled only)...');
+            const response = await this.makeAuthenticatedRequest(
+                '/after-school/courses/my-courses',
+                token
+            );
+            const data = await response.json();
+            console.log('✅ My Courses fetched successfully');
+            return data;
+        } catch (error) {
+            throw this.handleApiError(error, 'Error fetching My Courses');
+        }
     }
 
     // ===============================
@@ -1507,6 +1658,31 @@ class AfterSchoolService {
     }
 
     /**
+     * Get a single best assignment for quick navigation
+     * Backend: GET /after-school/assignments/one?course_id=...&block_id=...&lesson_id=...
+     */
+    async getOneAssignment(
+        courseId: number,
+        token: string,
+        opts: { block_id?: number; lesson_id?: number; prefer_status?: string } = {}
+    ): Promise<OneAssignmentResponse> {
+        try {
+            const params = new URLSearchParams();
+            params.append('course_id', courseId.toString());
+            if (opts.block_id) params.append('block_id', opts.block_id.toString());
+            if (opts.lesson_id) params.append('lesson_id', opts.lesson_id.toString());
+            if (opts.prefer_status) params.append('prefer_status', opts.prefer_status);
+
+            const endpoint = `/after-school/assignments/one?${params.toString()}`;
+            const response = await this.makeAuthenticatedRequest(endpoint, token);
+            const data = await response.json();
+            return data as OneAssignmentResponse;
+        } catch (error: any) {
+            throw this.handleApiError(error, 'Get One Assignment');
+        }
+    }
+
+    /**
      * Submit assignment and trigger auto-grading
      * This is the core method for your workflow: upload images -> PDF conversion -> auto-grading
      */
@@ -1758,12 +1934,22 @@ class AfterSchoolService {
     /**
      * Retry assignment
      */
-    async retryAssignment(assignmentId: string, token: string): Promise<AssignmentGradeResult> {
+    async retryAssignment(
+        assignmentId: string,
+        token: string,
+        submissionData?: {
+            submission_content?: string;
+            submission_file_path?: string;
+            content?: string;
+            file_path?: string;
+        }
+    ): Promise<AssignmentGradeResult> {
         try {
             const response = await this.makeAuthenticatedRequest(
-                `/grades/assignments/${assignmentId}/retry`,
+                `/after-school/sessions/assignments/${assignmentId}/retry`,
                 token,
-                'POST'
+                'POST',
+                submissionData
             );
 
             const data = await response.json();

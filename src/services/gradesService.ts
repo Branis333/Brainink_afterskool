@@ -272,7 +272,9 @@ export interface AutoGradingResponse {
         grade: number | null;
         submitted_at: string;
         graded_by: string;
+        submission_id?: number | null;
         can_retry: boolean;
+        attempts_used?: number;
         attempts_remaining: number;
     };
     processed_at: string;
@@ -318,7 +320,9 @@ class GradesService {
      */
     formatRelativeTime(dateStr?: string): string {
         if (!dateStr) return '';
-        const d = new Date(dateStr);
+
+        const normalised = /[zZ]|[\+\-]\d{2}:?\d{2}$/.test(dateStr) ? dateStr : `${dateStr}Z`;
+        const d = new Date(normalised);
         if (isNaN(d.getTime())) return '';
 
         const now = new Date();
@@ -329,6 +333,7 @@ class GradesService {
         const diffDay = Math.round(diffHr / 24);
 
         if (diffSec < 30) return 'Just now';
+        if (diffSec < 0) return 'Just now';
         if (diffMin < 1) return `${diffSec}s ago`;
         if (diffMin < 60) return `${diffMin} min ago`;
         if (diffHr < 24) return `${diffHr}h ago`;

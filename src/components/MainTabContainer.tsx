@@ -20,17 +20,19 @@ import { useFocusEffect } from '@react-navigation/native';
 // Import all main screens
 import { CourseHomepageScreen } from '../screens/CourseHomepageScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
-import { CourseSearchScreen } from '../screens/course/CourseSearchScreen';
+// import { SearchScreen } from '../screens/course/CourseSearchScreen';
+import { MyCoursesScreen } from '../screens/course/MyCourses';
 import { UploadsOverviewScreen } from '../screens/uploads/UploadsOverviewScreen';
 import { GradesOverviewScreen } from '../screens/grades/GradesOverviewScreen';
 
 // Import navigation components
 import { BottomTabs, TabItem } from '../components/BottomTabs';
 import { useAuth } from '../context/AuthContext';
+import { NotesListScreen } from '../screens/notes/NotesListScreen';
 
 type NavigationProp = NativeStackNavigationProp<any>;
 
-export type TabScreens = 'home' | 'courses' | 'uploads' | 'grades' | 'profile';
+export type TabScreens = 'home' | 'courses' | 'uploads' | 'notes' | 'profile';
 
 interface Props {
     navigation: NavigationProp;
@@ -98,36 +100,27 @@ export const MainTabContainer: React.FC<Props> = ({
         // Update badge counts when tab is accessed
         if (tabId === 'uploads') {
             setUploadsBadgeCount(0);
-        } else if (tabId === 'grades') {
+        } else if (tabId === 'notes') {
             setGradesBadgeCount(0);
         }
     };
 
-    // Handle tab navigation by updating navigation directly
-    React.useEffect(() => {
-        if (activeTab === 'uploads') {
-            // Navigate to uploads screen
-            navigation.navigate('UploadsOverview' as never);
-            return;
-        }
-        if (activeTab === 'grades') {
-            // Navigate to grades screen if it exists, otherwise handle appropriately
-            try {
-                navigation.navigate('GradesOverview' as never);
-            } catch (error) {
-                console.log('Grades screen not found, showing home instead');
-                setActiveTab('home');
-            }
-            return;
-        }
-    }, [activeTab, navigation]);
+    // Don't automatically navigate away - keep tabs visible
+    // Users can navigate through the bottom tab bar
 
     const renderActiveScreen = () => {
+        // Create a mock route object for screens that need it
+        const mockRoute = { key: activeTab, name: activeTab, params: {} } as any;
+
         switch (activeTab) {
             case 'home':
                 return <CourseHomepageScreen navigation={navigation} />;
             case 'courses':
-                return <CourseSearchScreen navigation={navigation} />;
+                return <MyCoursesScreen navigation={navigation} />;
+            case 'uploads':
+                return <UploadsOverviewScreen navigation={navigation as any} route={mockRoute} />;
+            case 'notes':
+                return <NotesListScreen navigation={navigation} />;
             case 'profile':
                 return <ProfileScreen navigation={navigation} />;
             default:
@@ -159,12 +152,11 @@ export const MainTabContainer: React.FC<Props> = ({
             onPress: () => handleTabPress('uploads'),
         },
         {
-            id: 'grades',
-            label: 'Grades',
-            icon: 'school-outline',
-            activeIcon: 'school',
-            badge: gradesBadgeCount,
-            onPress: () => handleTabPress('grades'),
+            id: 'notes',
+            label: 'Notes',
+            icon: 'document-text-outline',
+            activeIcon: 'document-text',
+            onPress: () => handleTabPress('notes'),
         },
         {
             id: 'profile',
@@ -189,8 +181,8 @@ export const MainTabContainer: React.FC<Props> = ({
                 <BottomTabs
                     activeTab={activeTab}
                     tabs={tabs}
-                    activeColor="#007AFF"
-                    inactiveColor="#8E8E93"
+                    activeColor="#26D9CA"
+                    inactiveColor="#9CA3AF"
                     backgroundColor="#FFFFFF"
                     showLabels={true}
                 />
@@ -202,9 +194,10 @@ export const MainTabContainer: React.FC<Props> = ({
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#f8f9fa',
+        backgroundColor: '#FFFFFF',
     },
     content: {
         flex: 1,
+        backgroundColor: '#FFFFFF',
     },
 });

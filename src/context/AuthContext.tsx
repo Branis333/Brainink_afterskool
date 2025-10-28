@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Types
 interface User {
@@ -33,13 +34,39 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [token, setToken] = useState<string | null>(null);
     const [school, setSchool] = useState<School | null>(null);
     const [role, setRole] = useState<'teacher' | 'principal' | null>(null);
-    const [isLoading, setIsLoading] = useState(false); // Set to false to avoid loading state
+    const [isLoading, setIsLoading] = useState(true);
 
-    // SIMPLIFIED: No SecureStore operations to avoid native crashes
+    // Hydrate auth state from AsyncStorage on app start
+    useEffect(() => {
+        const bootstrap = async () => {
+            try {
+                const [storedToken, storedUser] = await Promise.all([
+                    AsyncStorage.getItem('access_token'),
+                    AsyncStorage.getItem('user_profile'),
+                ]);
+                if (storedToken) setToken(storedToken);
+                if (storedUser) {
+                    try {
+                        setUser(JSON.parse(storedUser));
+                    } catch {
+                        // ignore corrupt JSON
+                    }
+                }
+            } finally {
+                setIsLoading(false);
+            }
+        };
+        bootstrap();
+    }, []);
+
+    // SIMPLIFIED: Keep AsyncStorage in sync for persistence
     const login = (authToken: string, userData: User) => {
         console.log('🔐 Logging in user:', userData.username);
         setToken(authToken);
         setUser(userData);
+        // Persist in background (no await needed)
+        AsyncStorage.setItem('access_token', authToken).catch(() => { });
+        AsyncStorage.setItem('user_profile', JSON.stringify(userData)).catch(() => { });
     };
 
     const setSchoolAndRole = (schoolData: School, userRole: 'teacher' | 'principal') => {
@@ -54,6 +81,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setToken(null);
         setSchool(null);
         setRole(null);
+        // Clear persisted data
+        AsyncStorage.multiRemove(['access_token', 'encrypted_user_data', 'user_profile']).catch(() => { });
     };
 
     const value: AuthContextType = {
