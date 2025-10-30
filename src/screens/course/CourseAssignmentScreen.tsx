@@ -521,7 +521,7 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
             }
 
             if (!lessonIdToUse && !blockIdToUse) {
-                throw new Error('Cannot upload assignment: no lesson or module context found for this assignment.');
+                throw new Error('Cannot upload assignment: no lesson or block context found for this assignment.');
             }
 
             // Store context for upload workflow

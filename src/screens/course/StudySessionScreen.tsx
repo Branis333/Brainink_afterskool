@@ -997,12 +997,12 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
         const lessonContentText = block?.content || lesson?.content || '';
         items.push({
             id: 'course-content',
-            title: block ? 'Module Content' : 'Lesson Content',
+            title: block ? 'Block Content' : 'Lesson Content',
             icon: '📘',
             content: (
                 <View style={styles.lessonContentCard}>
                     <Text style={styles.lessonContentTitle}>
-                        {block ? 'Module Content' : 'Lesson Content'}
+                        {block ? 'Block Content' : 'Lesson Content'}
                     </Text>
                     {lessonContentText ? (
                         <HighlightableText
@@ -1014,7 +1014,7 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                         <View style={styles.noContentContainer}>
                             <Text style={styles.noContentText}>No content available</Text>
                             <Text style={styles.noContentSubtext}>
-                                Content for this {block ? 'module' : 'lesson'} will be added soon
+                                Content for this {block ? 'block' : 'lesson'} will be added soon
                             </Text>
                         </View>
                     )}
@@ -1136,8 +1136,8 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
             push(`Quiz me on ${activeSection.title}`);
         }
 
-        // Keep extras minimal after structured follow-ups
-        push('Give me a quick exercise');
+    // Keep extras minimal after structured follow-ups
+    push('Give me a quick exercise');
 
         if (nextSection) {
             push(`Continue to ${nextSection.title}`);
@@ -1228,7 +1228,7 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
             const isString = typeof turn.comprehension_check === 'string';
             let question = '';
             let answers: string[] = [];
-
+            
             if (isString) {
                 question = turn.comprehension_check as string;
             } else {
@@ -1236,7 +1236,7 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                 question = cc?.question || '';
                 answers = cc?.expected_answers?.filter(Boolean) ?? [];
             }
-
+            
             const answerLine = answers.length > 0 ? answers.join(', ') : 'Think about it!';
             body = `${question}\n• ${answerLine}`;
         }
@@ -1282,8 +1282,8 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
             return;
         }
 
-        setAiError(null);
-        // Let ensureAiSession drive the loading state to avoid an early return inside it.
+    setAiError(null);
+    // Let ensureAiSession drive the loading state to avoid an early return inside it.
         const state = await ensureAiSession();
         if (!state) {
             setAuroraEnabled(false);
@@ -1758,7 +1758,7 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
     // ============================================
     // AURORA AI MODE - Clean Fresh Implementation
     // ============================================
-
+    
     const [walkIndex, setWalkIndex] = useState<number>(0);
     const [walkSectionId, setWalkSectionId] = useState<string | null>(null);
     const [walkthroughRecapPrompt, setWalkthroughRecapPrompt] = useState<{
@@ -1793,14 +1793,14 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
     const preComputeExplanations = useCallback(
         async (sectionId: string, snippets: string[], state: TutorSessionState) => {
             console.log(`[Aurora] Pre-computing explanations for ${snippets.length} snippets...`);
-
+            
             const explanations: TutorTurn[] = [];
 
             for (let i = 0; i < snippets.length; i++) {
                 try {
                     const snippet = snippets[i];
                     const prompt = `Explain this concisely: "${snippet}". Keep it brief and engaging.`;
-
+                    
                     const response = await aiTutorService.sendMessage(token!, state.session.session_id, {
                         input_type: 'text',
                         message: prompt,
@@ -1808,7 +1808,7 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
 
                     if (response.tutor_turn) {
                         explanations.push(response.tutor_turn);
-
+                        
                         // If first explanation, display immediately
                         if (i === 0 && walkSectionId === sectionId) {
                             updateAiState({
@@ -1846,7 +1846,7 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
         (sectionId: string) => {
             console.log(`[Aurora] Starting explain for section: ${sectionId}`);
             const text = getSectionPlainText(sectionId);
-
+            
             if (!text) {
                 // Fallback to normal explain
                 requestAiResponse('explain', sectionId);
@@ -1929,8 +1929,8 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
         }
 
         // Update highlight
-        const text = getSectionPlainText(walkSectionId);
-        setGhostHighlights(walkSectionId, text, snippets, nextIdx);
+    const text = getSectionPlainText(walkSectionId);
+    setGhostHighlights(walkSectionId, text, snippets, nextIdx);
         setWalkIndex(nextIdx);
 
         // Show cached explanation or request
@@ -1958,8 +1958,8 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
         const prevIdx = walkIndex - 1;
 
         // Update highlight
-        const text = getSectionPlainText(walkSectionId);
-        setGhostHighlights(walkSectionId, text, snippets, prevIdx);
+    const text = getSectionPlainText(walkSectionId);
+    setGhostHighlights(walkSectionId, text, snippets, prevIdx);
         setWalkIndex(prevIdx);
 
         // Show cached explanation
@@ -2226,9 +2226,9 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
     }, [activeSection?.id, aiFocusedSectionId, aiTurn, auroraEnabled, buildAuroraMicrocard, markCueDismissed, pushAuroraMicrocard, sections]);
 
     useEffect(() => {
-        if (!auroraEnabled) return;
-        if (!autoAdvanceEnabled) return;
-        if (!aiTurn) return;
+    if (!auroraEnabled) return;
+    if (!autoAdvanceEnabled) return;
+    if (!aiTurn) return;
         if (aiTurn.next_action !== 'continue') return;
         if (!nextSection) return;
         if (lastAutoContinueTurnIdRef.current === aiTurn.turn_id) return;

@@ -500,8 +500,8 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 style={[styles.modernTab, activeTab === 'lessons' && styles.modernTabActive]}
                 onPress={() => onTabChange('lessons')}
             >
-                <Text numberOfLines={1} style={[styles.modernTabText, activeTab === 'lessons' && styles.modernTabTextActive]}>
-                    {hasLessons ? 'Chapters' : hasBlocks ? 'Modules' : 'Chapters'}
+                <Text style={[styles.modernTabText, activeTab === 'lessons' && styles.modernTabTextActive]}>
+                    {hasLessons ? 'Chapters' : hasBlocks ? 'Blocks' : 'Chapters'}
                 </Text>
             </TouchableOpacity>
 
@@ -509,7 +509,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 style={[styles.modernTab, activeTab === 'assignments' && styles.modernTabActive]}
                 onPress={() => onTabChange('assignments')}
             >
-                <Text numberOfLines={1} style={[styles.modernTabText, activeTab === 'assignments' && styles.modernTabTextActive]}>
+                <Text style={[styles.modernTabText, activeTab === 'assignments' && styles.modernTabTextActive]}>
                     Assignments
                 </Text>
             </TouchableOpacity>
@@ -518,7 +518,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 style={[styles.modernTab, activeTab === 'progress' && styles.modernTabActive]}
                 onPress={() => onTabChange('progress')}
             >
-                <Text numberOfLines={1} style={[styles.modernTabText, activeTab === 'progress' && styles.modernTabTextActive]}>
+                <Text style={[styles.modernTabText, activeTab === 'progress' && styles.modernTabTextActive]}>
                     Progress
                 </Text>
             </TouchableOpacity>
@@ -689,7 +689,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         return (
             <View style={styles.emptyContainer}>
                 <Text style={styles.emptyText}>No content available</Text>
-                <Text style={styles.emptySubtext}>Lessons or modules will appear here when added</Text>
+                <Text style={styles.emptySubtext}>Lessons or blocks will appear here when added</Text>
             </View>
         );
     };
@@ -719,8 +719,8 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 courseTitle
             });
         } catch (error) {
-            console.error('Error opening module study session:', error);
-            Alert.alert('Error', 'Failed to open module study session.');
+            console.error('Error opening block study session:', error);
+            Alert.alert('Error', 'Failed to open block study session.');
         }
     };
 
@@ -729,7 +729,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
             <View style={styles.lessonCard}>
                 <View style={styles.lessonHeader}>
                     <View style={styles.lessonInfo}>
-                        <Text style={styles.lessonOrder}>Week {block.week} • Module {block.block_number}</Text>
+                        <Text style={styles.lessonOrder}>Week {block.week} • Block {block.block_number}</Text>
                         <Text style={styles.lessonTitle}>{block.title}</Text>
                         <Text style={styles.lessonDuration}>{formatDuration(block.duration_minutes)}</Text>
                         {Array.isArray(block.learning_objectives) && block.learning_objectives.length > 0 && (
@@ -749,7 +749,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                     >
                         <Text style={styles.startStudyButtonText}>
                             {activeBlockSessions[block.id]?.status === 'completed'
-                                ? 'Review Module'
+                                ? 'Review Block'
                                 : activeBlockSessions[block.id]
                                     ? 'Continue Study'
                                     : 'Start Study'}
@@ -1168,11 +1168,10 @@ const styles = StyleSheet.create({
     modernTabContainer: {
         flexDirection: 'row',
         backgroundColor: '#FFFFFF',
-        marginHorizontal: 12, // give the tabs a bit more width
+        marginHorizontal: 20,
         marginVertical: 16,
         borderRadius: 12,
         padding: 4,
-        gap: 6, // spacing between tabs
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.05,
@@ -1182,7 +1181,7 @@ const styles = StyleSheet.create({
     modernTab: {
         flex: 1,
         paddingVertical: 12,
-        paddingHorizontal: 12,
+        paddingHorizontal: 16,
         borderRadius: 8,
         alignItems: 'center',
     },
@@ -1190,7 +1189,7 @@ const styles = StyleSheet.create({
         backgroundColor: '#34C759',
     },
     modernTabText: {
-        fontSize: 13,
+        fontSize: 14,
         fontWeight: '600',
         color: '#8E8E93',
     },
