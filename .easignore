@@ -11,4 +11,6 @@ dist/
 *.log
 *.tmp
 *.temp
-uploads/
+# IMPORTANT: Do NOT ignore code under src/screens/uploads.
+# If you have a top-level uploads directory for artifacts, ignore it explicitly:
+/uploads/
