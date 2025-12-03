@@ -22,6 +22,9 @@ import { RootStackParamList } from '../../navigation/AppNavigatorNew';
 import { uploadsService, AISubmission } from '../../services/uploadsService';
 import { gradesService, StudentAssignment } from '../../services/gradesService';
 import { useAuth } from '../../context/AuthContext';
+import { progressService, ProgressDigest } from '../../services/progressService';
+
+import { Ionicons } from '@expo/vector-icons';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'UploadsOverview'>;
 
@@ -58,18 +61,8 @@ export const UploadsOverviewScreen: React.FC<Props> = ({ navigation }) => {
     const [recentUploads, setRecentUploads] = useState<AISubmission[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [assignments, setAssignments] = useState<StudentAssignment[]>([]);
-    const [workflowStatus, setWorkflowStatus] = useState<{
-        hasActiveUploads: boolean;
-        nextAction: string;
-        canContinue: boolean;
-        processingCount: number;
-    }>({
-        hasActiveUploads: false,
-        nextAction: 'No active uploads',
-        canContinue: false,
-        processingCount: 0
-    });
+    const [weeklyDigest, setWeeklyDigest] = useState<ProgressDigest | null>(null);
+    const [isProgressUpdating, setIsProgressUpdating] = useState(false);
 
     const screenWidth = Dimensions.get('window').width;
 
@@ -94,31 +87,15 @@ export const UploadsOverviewScreen: React.FC<Props> = ({ navigation }) => {
             const recentSubmissions = await uploadsService.getUserRecentSubmissions(token, 5);
             setRecentUploads(recentSubmissions);
 
-            // Load workflow context - check for assignments and processing status
-            if (user?.id) {
-                try {
-                    const assignmentsData = await gradesService.getStudentAssignments(user.id, token, { limit: 10 });
-                    setAssignments(assignmentsData);
+            // Removed: workflow/assignments context
 
-                    // Determine workflow status
-                    const processingUploads = recentSubmissions.filter(upload =>
-                        !upload.ai_processed || upload.ai_score === null
-                    );
-                    const availableAssignments = assignmentsData.filter(a => a.status === 'assigned');
-
-                    setWorkflowStatus({
-                        hasActiveUploads: processingUploads.length > 0,
-                        processingCount: processingUploads.length,
-                        nextAction: processingUploads.length > 0
-                            ? `${processingUploads.length} uploads processing`
-                            : availableAssignments.length > 0
-                                ? 'Ready for new assignments'
-                                : 'Continue learning to unlock assignments',
-                        canContinue: availableAssignments.length > 0 || processingUploads.length > 0
-                    });
-                } catch (workflowError) {
-                    console.warn('Error loading workflow context:', workflowError);
-                }
+            // Load current weekly digest (if any)
+            try {
+                const digest = await progressService.getWeeklyDigest(token);
+                setWeeklyDigest(digest);
+            } catch (e) {
+                console.warn('Weekly digest fetch failed:', e);
+                setWeeklyDigest(null);
             }
 
         } catch (error) {
@@ -135,60 +112,23 @@ export const UploadsOverviewScreen: React.FC<Props> = ({ navigation }) => {
         loadUploadsOverview();
     };
 
-    // Workflow Navigation Functions
-    const navigateToAssignmentUpload = () => {
-        const nextAssignment = assignments.find(a => a.status === 'assigned');
-        if (nextAssignment) {
-            navigation.navigate('BulkUpload', {
-                assignmentId: nextAssignment.assignment_id,
-                courseId: nextAssignment.course_id,
-                submissionType: 'homework'
-            });
+    const handleGenerateWeeklyDigest = async () => {
+        if (!token) return;
+        try {
+            setIsProgressUpdating(true);
+            const digest = await progressService.generateWeeklyDigest(token);
+            setWeeklyDigest(digest);
+            Alert.alert('Updated', 'Weekly progress has been refreshed.');
+        } catch (e) {
+            Alert.alert('Error', 'Failed to update weekly progress. Please try again.');
+        } finally {
+            setIsProgressUpdating(false);
         }
     };
 
-    const continueWorkflowCycle = () => {
-        navigation.navigate('CourseHomepage');
-    };
+    // Removed: workflow navigation helpers
 
-    const navigateToProcessingStatus = () => {
-        navigation.navigate('UploadProgress');
-    };
-
-    const quickActions: QuickAction[] = [
-        {
-            id: 'upload-file',
-            title: 'Upload File',
-            subtitle: 'Upload single file',
-            icon: '📄',
-            color: '#3B82F6',
-            action: () => navigation.navigate('FileUpload'),
-        },
-        {
-            id: 'bulk-upload',
-            title: 'Bulk Upload',
-            subtitle: 'Upload multiple files',
-            icon: '📚',
-            color: '#8B5CF6',
-            action: () => navigation.navigate('BulkUpload'),
-        },
-        {
-            id: 'manage-uploads',
-            title: 'Manage Files',
-            subtitle: 'View all uploads',
-            icon: '📁',
-            color: '#10B981',
-            action: () => navigation.navigate('UploadsManagement'),
-        },
-        {
-            id: 'upload-progress',
-            title: 'Progress',
-            subtitle: 'Monitor uploads',
-            icon: '⏳',
-            color: '#F59E0B',
-            action: () => navigation.navigate('UploadProgress'),
-        },
-    ];
+    // Removed: quick actions list
 
     const formatFileSize = (bytes: number): string => {
         const sizes = ['Bytes', 'KB', 'MB', 'GB'];
@@ -267,20 +207,58 @@ export const UploadsOverviewScreen: React.FC<Props> = ({ navigation }) => {
                     <RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />
                 }
             >
-                {/* Header */}
-                <View style={styles.header}>
-                    <View style={styles.headerTop}>
+                {/* Minimal Back + Title */}
+                <View style={styles.topActions}>
+                    <TouchableOpacity
+                        onPress={() => navigation.navigate('MainTabs' as never)}
+                        style={styles.backIconButton}
+                        accessibilityRole="button"
+                        accessibilityLabel="Go back"
+                    >
+                        <Ionicons name="chevron-back" size={22} color="#111827" />
+                    </TouchableOpacity>
+                </View>
+                <Text style={styles.pageTitle}>Grades</Text>
+
+                {/* Weekly Progress Digest (Top-most card) */}
+                <View style={styles.section}>
+                    <View style={styles.progressCard}>
+                        <Text style={styles.progressCardTitle}>Weekly Progress</Text>
+                        {weeklyDigest ? (
+                            <>
+                                <Text style={styles.progressCardSummary}>{weeklyDigest.summary}</Text>
+                                <View style={styles.progressCardMetaRow}>
+                                    <Text style={styles.progressCardMeta}>
+                                        {(() => {
+                                            const start = weeklyDigest.period_start;
+                                            const end = weeklyDigest.period_end;
+                                            return `${new Date(start).toLocaleDateString()} - ${new Date(end).toLocaleDateString()}`;
+                                        })()}
+                                    </Text>
+                                    <Text style={styles.progressCardMeta}>• {weeklyDigest.assignments_count} items</Text>
+                                    {typeof weeklyDigest.avg_grade === 'number' && (
+                                        <Text style={styles.progressCardMeta}>• {weeklyDigest.avg_grade.toFixed(1)}% avg</Text>
+                                    )}
+                                </View>
+                            </>
+                        ) : (
+                            <Text style={styles.progressCardSummaryMuted}>
+                                No weekly progress yet. Tap Update to generate.
+                            </Text>
+                        )}
                         <TouchableOpacity
-                            style={styles.backButton}
-                            onPress={() => navigation.navigate('MainTabs' as never)}
+                            style={styles.progressUpdateButton}
+                            onPress={handleGenerateWeeklyDigest}
+                            disabled={isProgressUpdating}
+                            activeOpacity={0.7}
                         >
-                            <Text style={styles.backButtonText}>← Back</Text>
+                            {isProgressUpdating ? (
+                                <ActivityIndicator color="#FFFFFF" size="small" />
+                            ) : (
+                                <Text style={styles.progressUpdateButtonText}>Update progress</Text>
+                            )}
                         </TouchableOpacity>
-                        <Text style={styles.headerTitle}>Uploads Overview</Text>
                     </View>
-                    <Text style={styles.headerSubtitle}>
-                        Manage your files and track upload progress
-                    </Text>
                 </View>
 
                 {/* Statistics Cards */}
@@ -308,70 +286,9 @@ export const UploadsOverviewScreen: React.FC<Props> = ({ navigation }) => {
                     </View>
                 </View>
 
-                {/* Workflow Status Card */}
-                <View style={styles.workflowCard}>
-                    <View style={styles.workflowHeader}>
-                        <Text style={styles.workflowIcon}>
-                            {workflowStatus.hasActiveUploads ? '⚡' : '✓'}
-                        </Text>
-                        <Text style={styles.workflowTitle}>Assignment Workflow</Text>
-                    </View>
-                    <Text style={styles.workflowStatus}>{workflowStatus.nextAction}</Text>
+                {/* Removed: Assignment Workflow card */}
 
-                    {workflowStatus.canContinue && (
-                        <View style={styles.workflowActions}>
-                            {assignments.some(a => a.status === 'assigned') && (
-                                <TouchableOpacity
-                                    style={styles.workflowButton}
-                                    onPress={navigateToAssignmentUpload}
-                                >
-                                    <Text style={styles.workflowButtonText}>Upload for Assignment</Text>
-                                </TouchableOpacity>
-                            )}
-
-                            {workflowStatus.hasActiveUploads && (
-                                <TouchableOpacity
-                                    style={[styles.workflowButton, styles.workflowButtonSecondary]}
-                                    onPress={navigateToProcessingStatus}
-                                >
-                                    <Text style={[styles.workflowButtonText, styles.workflowButtonTextSecondary]}>
-                                        View Progress
-                                    </Text>
-                                </TouchableOpacity>
-                            )}
-
-                            <TouchableOpacity
-                                style={styles.continueButton}
-                                onPress={continueWorkflowCycle}
-                            >
-                                <Text style={styles.continueButtonText}>Continue Learning</Text>
-                            </TouchableOpacity>
-                        </View>
-                    )}
-                </View>
-
-                {/* Quick Actions */}
-                <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Quick Actions</Text>
-                    <View style={styles.quickActionsContainer}>
-                        {quickActions.map((action) => (
-                            <TouchableOpacity
-                                key={action.id}
-                                style={[styles.actionCard, { borderLeftColor: action.color }]}
-                                onPress={action.action}
-                                activeOpacity={0.7}
-                            >
-                                <View style={styles.actionContent}>
-                                    <Text style={styles.actionIcon}>{action.icon}</Text>
-                                    <View style={styles.actionText}>
-                                        <Text style={styles.actionTitle}>{action.title}</Text>
-                                        <Text style={styles.actionSubtitle}>{action.subtitle}</Text>
-                                    </View>
-                                </View>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
-                </View>
+                {/* Removed: Quick Actions section */}
 
                 {/* Recent Uploads */}
                 <View style={styles.section}>
@@ -477,6 +394,30 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: 'transparent',
     },
+    topActions: {
+        paddingHorizontal: 16,
+        paddingTop: 8,
+        paddingBottom: 4,
+        backgroundColor: 'transparent',
+    },
+    backIconButton: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        backgroundColor: '#F3F4F6',
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    pageTitle: {
+        fontSize: 28,
+        fontWeight: '700',
+        color: '#111827',
+        marginTop: 8,
+        paddingHorizontal: 16,
+        alignItems: 'center',
+    },
     loadingContainer: {
         flex: 1,
         justifyContent: 'center',
@@ -519,6 +460,59 @@ const styles = StyleSheet.create({
     headerSubtitle: {
         fontSize: 16,
         color: '#6B7280',
+    },
+    // Progress Digest Card Styles
+    progressCard: {
+        backgroundColor: '#FFFFFF',
+        borderRadius: 12,
+        padding: 16,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1,
+        shadowRadius: 3,
+        elevation: 2,
+        borderLeftWidth: 4,
+        borderLeftColor: '#10B981',
+    },
+    progressCardTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#111827',
+        marginBottom: 8,
+    },
+    progressCardSummary: {
+        fontSize: 14,
+        color: '#1F2937',
+        lineHeight: 20,
+        marginBottom: 10,
+    },
+    progressCardSummaryMuted: {
+        fontSize: 14,
+        color: '#6B7280',
+        fontStyle: 'italic',
+        marginBottom: 10,
+    },
+    progressCardMetaRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 6,
+        marginBottom: 8,
+    },
+    progressCardMeta: {
+        fontSize: 12,
+        color: '#6B7280',
+    },
+    progressUpdateButton: {
+        alignSelf: 'flex-end',
+        backgroundColor: '#10B981',
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderRadius: 8,
+    },
+    progressUpdateButtonText: {
+        color: '#FFFFFF',
+        fontSize: 13,
+        fontWeight: '600',
     },
     statsContainer: {
         flexDirection: 'row',

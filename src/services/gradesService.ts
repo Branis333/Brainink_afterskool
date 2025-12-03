@@ -55,6 +55,10 @@ export interface StudentProgress {
     // Added for block-based progress tracking
     blocks_completed?: number;
     total_blocks?: number;
+    // New: assignment completion tracking (backend now includes assignments in progress)
+    passed_assignments?: number;
+    total_assignments?: number;
+    assignments_completion_percentage?: number; // may appear as assignments_pct in some responses
     average_score?: number;
     total_study_time: number;
     sessions_count: number;

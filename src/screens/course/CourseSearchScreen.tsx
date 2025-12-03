@@ -356,14 +356,26 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
     if (loading) {
         return (
             <SafeAreaView style={styles.container}>
-                <View style={styles.header}>
+                <View style={styles.searchHeader}>
                     <TouchableOpacity
                         style={styles.backButton}
                         onPress={() => navigation.goBack()}
                     >
-                        <Text style={styles.backButtonText}>← Back</Text>
+                        <Ionicons name="chevron-back" size={28} color="#1a1a1a" />
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Browse Courses</Text>
+                    <View style={styles.searchContainer}>
+                        <Ionicons name="search" size={18} color="#999" />
+                        <TextInput
+                            style={styles.searchInput}
+                            placeholder="Search courses..."
+                            placeholderTextColor="#999"
+                            value={searchText}
+                            onChangeText={setSearchText}
+                        />
+                    </View>
+                    <TouchableOpacity style={styles.searchButton}>
+                        <Text style={styles.searchButtonText}>Search</Text>
+                    </TouchableOpacity>
                 </View>
                 <View style={styles.loadingContainer}>
                     <ActivityIndicator size="large" color="#007AFF" />
@@ -383,15 +395,32 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
     return (
         <TabBarWrapper activeTab="courses" showTabs={true}>
             <SafeAreaView style={styles.container}>
-                {/* Header */}
-                <View style={styles.header}>
+                {/* Search Header */}
+                <View style={styles.searchHeader}>
                     <TouchableOpacity
                         style={styles.backButton}
                         onPress={() => navigation.goBack()}
                     >
-                        <Text style={styles.backButtonText}>← Back</Text>
+                        <Ionicons name="chevron-back" size={28} color="#1a1a1a" />
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Browse Courses</Text>
+                    <View style={styles.searchContainer}>
+                        <Ionicons name="search" size={18} color="#999" />
+                        <TextInput
+                            style={styles.searchInput}
+                            placeholder="Search courses..."
+                            placeholderTextColor="#999"
+                            value={searchText}
+                            onChangeText={setSearchText}
+                        />
+                        {searchText.length > 0 && (
+                            <TouchableOpacity onPress={() => setSearchText('')}>
+                                <Ionicons name="close-circle" size={20} color="#999" />
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                    <TouchableOpacity style={styles.searchButton}>
+                        <Text style={styles.searchButtonText}>Search</Text>
+                    </TouchableOpacity>
                 </View>
 
                 <ScrollView
@@ -400,29 +429,7 @@ export const CourseSearchScreen: React.FC<Props> = ({ navigation }) => {
                     refreshControl={
                         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
                     }
-                    stickyHeaderIndices={[0]}
                 >
-                    {/* Search Header */}
-                    <View style={styles.stickySearchHeader}>
-                        <View style={styles.searchHeader}>
-                            <View style={styles.searchContainer}>
-                                <Ionicons name="search" size={18} color="#999" />
-                                <TextInput
-                                    style={styles.searchInput}
-                                    placeholder="Search courses..."
-                                    placeholderTextColor="#999"
-                                    value={searchText}
-                                    onChangeText={setSearchText}
-                                />
-                            </View>
-                            <TouchableOpacity
-                                style={styles.filterButton}
-                                onPress={() => setShowFilters(!showFilters)}
-                            >
-                                <Ionicons name="funnel" size={18} color="#fff" />
-                            </TouchableOpacity>
-                        </View>
-                    </View>
 
                     {/* Content */}
                     <View style={styles.contentContainer}>
@@ -462,27 +469,39 @@ const styles = StyleSheet.create({
     scrollView: {
         flex: 1,
     },
-    header: {
+    searchHeader: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingHorizontal: 20,
-        paddingVertical: 16,
+        paddingHorizontal: 12,
+        paddingVertical: 12,
         backgroundColor: '#fff',
-        borderBottomWidth: 1,
-        borderBottomColor: '#e0e0e0',
+        gap: 10,
     },
     backButton: {
-        marginRight: 16,
+        padding: 4,
     },
-    backButtonText: {
-        fontSize: 16,
-        color: '#007AFF',
-    },
-    headerTitle: {
-        fontSize: 18,
-        fontWeight: 'bold',
-        color: '#1a1a1a',
+    searchContainer: {
         flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#f0f0f0',
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        height: 44,
+        gap: 8,
+    },
+    searchInput: {
+        flex: 1,
+        fontSize: 16,
+        color: '#333',
+    },
+    searchButton: {
+        paddingHorizontal: 8,
+    },
+    searchButtonText: {
+        fontSize: 17,
+        color: '#007AFF',
+        fontWeight: '500',
     },
     loadingContainer: {
         flex: 1,
@@ -494,42 +513,6 @@ const styles = StyleSheet.create({
         marginTop: 12,
         fontSize: 16,
         color: '#666',
-    },
-    stickySearchHeader: {
-        backgroundColor: '#f8f9fa',
-    },
-    searchHeader: {
-        backgroundColor: '#fff',
-        paddingHorizontal: 20,
-        paddingVertical: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: '#e0e0e0',
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-    },
-    searchContainer: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#f0f0f0',
-        borderRadius: 20,
-        paddingHorizontal: 14,
-        height: 40,
-        gap: 8,
-    },
-    searchInput: {
-        flex: 1,
-        fontSize: 16,
-        color: '#333',
-    },
-    filterButton: {
-        width: 44,
-        height: 44,
-        backgroundColor: '#007AFF',
-        borderRadius: 22,
-        justifyContent: 'center',
-        alignItems: 'center',
     },
     contentContainer: {
         paddingHorizontal: 20,

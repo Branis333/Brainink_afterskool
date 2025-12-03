@@ -16,6 +16,35 @@ const getBackendUrl = () => {
 // TYPESCRIPT INTERFACES
 // ===============================
 
+// Shared Resource Interfaces
+export interface VideoResource {
+    title: string;
+    url: string;
+    type?: string;
+    description?: string;
+    thumbnail?: string;
+    channel?: string;
+    search_query?: string;
+}
+
+export interface ObjectiveItem {
+    objective: string;
+    summary?: string;
+    videos?: VideoResource[];
+}
+
+export interface FlashcardItem {
+    front: string;
+    back: string;
+}
+
+export interface ObjectiveProgressEntry {
+    objective_index: number;
+    latest_grade: number;
+    performance_summary?: string;
+    last_quiz_at?: string;
+}
+
 // File Upload Interfaces
 export interface FileValidationResult {
     valid: boolean;
@@ -56,6 +85,12 @@ export interface StudentNote {
     main_topics?: string[];  // Backend uses 'main_topics', not 'ai_main_topics'
     learning_concepts?: string[];  // Backend uses 'learning_concepts', not 'ai_learning_concepts'
     questions_generated?: string[];  // Backend uses 'questions_generated', not 'ai_questions_generated'
+
+    // Enhanced structures
+    objectives?: ObjectiveItem[];
+    objective_flashcards?: FlashcardItem[][]; // aligned with objectives
+    overall_flashcards?: FlashcardItem[];
+    objective_progress?: ObjectiveProgressEntry[];
 
     // Metadata
     is_starred: boolean;
@@ -114,6 +149,7 @@ export interface NoteUploadResponse {
         main_topics: string[];
         learning_concepts: string[];
         questions_generated: string[];
+        objectives?: ObjectiveItem[];
     };
     processed_at?: string;
     created_at?: string;
@@ -132,6 +168,47 @@ export interface NoteAnalysisResult {
     main_topics: string[];
     learning_concepts: string[];
     questions_generated: string[];
+}
+
+// Quiz & Flashcards Interfaces (backend-aligned)
+export interface QuizQuestion {
+    question: string;
+    options: string[]; // length 4
+    answer_index: number; // 0..3
+}
+
+export interface ObjectiveQuizResponse {
+    note_id: number;
+    objective_index: number; // normalised to 0-based by backend
+    objective: string;
+    num_questions: number;
+    questions: QuizQuestion[];
+    generated_at: string;
+}
+
+export interface QuizSubmitRequest {
+    objective_index: number; // 1- or 0-based (backend normalises)
+    questions: QuizQuestion[];
+    user_answers: number[];
+}
+
+export interface QuizSubmitResponse {
+    note_id: number;
+    objective_index: number; // 0-based
+    total_questions: number;
+    correct_count: number;
+    grade_percentage: number;
+    performance_summary?: string;
+    submitted_at: string;
+}
+
+export interface FlashcardsResponse {
+    note_id: number;
+    scope: 'objective' | 'overall';
+    objective_index?: number;
+    count: number;
+    flashcards: FlashcardItem[];
+    generated_at: string;
 }
 
 // Notes Statistics
@@ -331,6 +408,116 @@ class NotesService {
             console.error('❌ Error uploading notes:', error);
             throw error;
         }
+    }
+
+    // ===============================
+    // OBJECTIVE QUIZ METHODS
+    // ===============================
+
+    /**
+     * Generate quiz for a specific objective (simple route)
+     * Endpoint: POST /after-school/notes/{note_id}/quiz
+     */
+    async generateObjectiveQuiz(
+        noteId: number,
+        objectiveIndex: number,
+        token: string,
+        numQuestions: number = 7
+    ): Promise<ObjectiveQuizResponse> {
+        const form = new FormData();
+        form.append('objective_index', String(objectiveIndex));
+        form.append('num_questions', String(numQuestions));
+
+        const res = await fetch(`${this.baseUrl}/after-school/notes/${noteId}/quiz`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: form,
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to generate objective quiz');
+        }
+        return res.json();
+    }
+
+    /**
+     * Submit quiz answers for a specific objective
+     * Endpoint: POST /after-school/notes/{note_id}/quiz/submit
+     */
+    async submitObjectiveQuiz(
+        noteId: number,
+        payload: QuizSubmitRequest,
+        token: string
+    ): Promise<QuizSubmitResponse> {
+        const res = await fetch(`${this.baseUrl}/after-school/notes/${noteId}/quiz/submit`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to submit quiz');
+        }
+        return res.json();
+    }
+
+    /**
+     * Persist latest grade for an objective (manual grade endpoint)
+     * Endpoint: POST /after-school/notes/{note_id}/objectives/{objective_index}/quiz/grade
+     */
+    async submitObjectiveQuizGrade(
+        noteId: number,
+        objectiveIndex: number,
+        gradePercentage: number,
+        token: string,
+        performanceSummary?: string
+    ): Promise<MessageResponse> {
+        const res = await fetch(`${this.baseUrl}/after-school/notes/${noteId}/objectives/${objectiveIndex}/quiz/grade`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ grade_percentage: gradePercentage, performance_summary: performanceSummary }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to store objective grade');
+        }
+        return res.json();
+    }
+
+    // ===============================
+    // OBJECTIVE FLASHCARDS METHODS
+    // ===============================
+
+    /**
+     * Generate flashcards for a specific objective (simple route)
+     * Endpoint: POST /after-school/notes/{note_id}/flashcards
+     */
+    async generateObjectiveFlashcards(
+        noteId: number,
+        objectiveIndex: number,
+        token: string,
+        count: number = 8
+    ): Promise<FlashcardsResponse> {
+        const form = new FormData();
+        form.append('objective_index', String(objectiveIndex));
+        form.append('count', String(count));
+
+        const res = await fetch(`${this.baseUrl}/after-school/notes/${noteId}/flashcards`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: form,
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to generate objective flashcards');
+        }
+        return res.json();
     }
 
     // ===============================

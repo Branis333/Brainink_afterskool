@@ -33,6 +33,7 @@ import {
     AssignmentStatus
 } from '../../services/afterSchoolService';
 import { gradesService } from '../../services/gradesService';
+import { progressService, ProgressDigest } from '../../services/progressService';
 
 type NavigationProp = NativeStackNavigationProp<any>;
 type RouteProp_ = RouteProp<{ params: { courseId: number; courseTitle: string } }>;
@@ -57,6 +58,8 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [activeTab, setActiveTab] = useState<'overview' | 'assignments' | 'blocks' | 'analytics'>('overview');
+    const [courseDigest, setCourseDigest] = useState<ProgressDigest | null>(null);
+    const [digestUpdating, setDigestUpdating] = useState(false);
 
     // Load progress data
     const loadProgressData = async (isRefresh: boolean = false) => {
@@ -67,12 +70,13 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
                 throw new Error('No authentication token available');
             }
 
-            // Load progress and course data in parallel
-            const [progressData, courseData, assignmentsData, blocksProgressData] = await Promise.all([
+            // Load progress, course data, blocks progress, and course digest in parallel
+            const [progressData, courseData, assignmentsData, blocksProgressData, digestData] = await Promise.all([
                 afterSchoolService.getStudentProgress(courseId, token).catch(() => null),
                 afterSchoolService.getCourseDetails(courseId, token),
                 afterSchoolService.getCourseAssignments(courseId, token).catch(() => []),
-                afterSchoolService.getCourseBlocksProgress(courseId, token).catch(() => null)
+                afterSchoolService.getCourseBlocksProgress(courseId, token).catch(() => null),
+                progressService.getCourseDigest(courseId, token).catch(() => null),
             ]);
 
             setProgress(progressData);
@@ -81,6 +85,7 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
             setBlocksProgress(blocksProgressData);
             // For now, use empty sessions array - in real app would fetch from appropriate service
             setSessions([]);
+            setCourseDigest(digestData);
 
             // Load assignment statuses for all assignments
             if (assignmentsData.length > 0) {
@@ -290,6 +295,51 @@ export const CourseProgressScreen: React.FC<Props> = ({ navigation, route }) => 
 
         return (
             <View style={styles.contentContainer}>
+                {/* Course Progress Digest (top card) */}
+                <View style={styles.progressDigestCard}>
+                    <Text style={styles.progressDigestTitle}>Course Progress</Text>
+                    {courseDigest ? (
+                        <>
+                            <Text style={styles.progressDigestSummary}>{courseDigest.summary}</Text>
+                            <View style={styles.progressDigestMetaRow}>
+                                <Text style={styles.progressDigestMeta}>
+                                    {new Date(courseDigest.period_start).toLocaleDateString()} - {new Date(courseDigest.period_end).toLocaleDateString()}
+                                </Text>
+                                <Text style={styles.progressDigestMeta}>• {courseDigest.assignments_count} items</Text>
+                                {typeof courseDigest.avg_grade === 'number' && (
+                                    <Text style={styles.progressDigestMeta}>• {courseDigest.avg_grade.toFixed(1)}% avg</Text>
+                                )}
+                            </View>
+
+                        </>
+                    ) : (
+                        <Text style={styles.progressDigestSummaryMuted}>
+                            No course progress yet. Tap Update to generate.
+                        </Text>
+                    )}
+                    <TouchableOpacity
+                        style={styles.progressDigestUpdateButton}
+                        onPress={async () => {
+                            if (!token) return;
+                            try {
+                                setDigestUpdating(true);
+                                const updated = await progressService.generateCourseDigest(courseId, token);
+                                setCourseDigest(updated);
+                            } catch (e) {
+                                Alert.alert('Error', 'Failed to update course progress.');
+                            } finally {
+                                setDigestUpdating(false);
+                            }
+                        }}
+                        disabled={digestUpdating}
+                    >
+                        {digestUpdating ? (
+                            <ActivityIndicator color="#FFFFFF" size="small" />
+                        ) : (
+                            <Text style={styles.progressDigestUpdateButtonText}>Update progress</Text>
+                        )}
+                    </TouchableOpacity>
+                </View>
                 {/* Progress Circle */}
                 <View style={styles.progressCircleContainer}>
                     <View style={styles.progressCircle}>
@@ -1180,6 +1230,60 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#666',
         textAlign: 'center',
+    },
+    // Course progress digest card
+    progressDigestCard: {
+        backgroundColor: '#fff',
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 16,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 2,
+        borderLeftWidth: 4,
+        borderLeftColor: '#10B981',
+    },
+    progressDigestTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#1a1a1a',
+        marginBottom: 8,
+    },
+    progressDigestSummary: {
+        fontSize: 14,
+        color: '#111827',
+        lineHeight: 20,
+        marginBottom: 10,
+    },
+    progressDigestSummaryMuted: {
+        fontSize: 14,
+        color: '#6B7280',
+        fontStyle: 'italic',
+        marginBottom: 10,
+    },
+    progressDigestMetaRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 6,
+        marginBottom: 8,
+    },
+    progressDigestMeta: {
+        fontSize: 12,
+        color: '#6B7280',
+    },
+    progressDigestUpdateButton: {
+        alignSelf: 'flex-end',
+        backgroundColor: '#10B981',
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderRadius: 8,
+    },
+    progressDigestUpdateButtonText: {
+        color: '#FFFFFF',
+        fontSize: 13,
+        fontWeight: '600',
     },
     // Assignment-specific styles
     assignmentCard: {

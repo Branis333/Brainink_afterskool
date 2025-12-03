@@ -17,6 +17,7 @@ import {
     FlatList,
     StatusBar,
     Image,
+    ImageBackground,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { BlurView } from 'expo-blur';
@@ -217,7 +218,12 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
 
     // Render header section (inspired by screenshot 1)
     const renderHeader = () => (
-        <View style={styles.headerContainer}>
+        <ImageBackground
+            source={require('../../assets/images/header-pattern.png')}
+            style={styles.headerContainer}
+            imageStyle={styles.headerBackgroundImage}
+            resizeMode="cover"
+        >
             {/* Top Navigation Bar */}
             <View style={styles.topNav}>
                 <TouchableOpacity style={styles.menuButton}>
@@ -256,7 +262,7 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
                     </BlurView>
                 </TouchableOpacity>
             </View>
-        </View>
+        </ImageBackground>
     );
 
     // Render horizontal course card (carousel style)
@@ -265,73 +271,75 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
         const isCompleted = progressPercentage >= 100;
 
         return (
-            <TouchableOpacity
-                style={styles.horizontalCourseCard}
-                onPress={() => navigateToCourse(course)}
-                activeOpacity={0.8}
-            >
-                {/* Card Image - Display actual image if available, otherwise placeholder */}
-                {course.image ? (
-                    <Image
-                        source={{ uri: `data:image/jpeg;base64,${course.image}` }}
-                        style={styles.cardImagePlaceholder}
-                        resizeMode="cover"
-                    />
-                ) : (
-                    <View style={[styles.cardImagePlaceholder, { backgroundColor: getCardColor(index) }]}>
-                        <Ionicons name="book-outline" size={28} color="white" />
-                    </View>
-                )}
-
-                {/* Course Info */}
-                <View style={styles.horizontalCardContent}>
-                    <View style={styles.cardBadge}>
-                        <Text style={styles.cardBadgeText}>
-                            {course.difficulty_level ? course.difficulty_level.charAt(0).toUpperCase() + course.difficulty_level.slice(1) : 'Course'}
-                        </Text>
-                    </View>
-
-                    <Text style={styles.horizontalCourseTitle} numberOfLines={2}>
-                        {course.title || 'Untitled Course'}
-                    </Text>
-
-                    <Text style={styles.horizontalCourseSubject} numberOfLines={1}>
-                        {course.subject || 'General'}
-                    </Text>
-
-                    {/* Meta Info */}
-                    <View style={styles.horizontalMetaRow}>
-                        <View style={styles.metaItem}>
-                            <Ionicons name="star" size={14} color="#FFB800" />
-                            <Text style={styles.metaText}>{progressPercentage >= 100 ? '5.0' : '4.9'}</Text>
-                            <Text style={styles.metaSubtext}>
-                                ({course.total_weeks || 8} weeks)
-                            </Text>
-                        </View>
-                    </View>
-
-                    <View style={styles.horizontalMetaRow}>
-                        <View style={styles.metaItem}>
-                            <Ionicons name="time-outline" size={14} color="#26D9CA" />
-                            <Text style={styles.metaText}>{course.blocks_per_week || 2} modules</Text>
-                        </View>
-                        <View style={styles.metaItem}>
-                            <Ionicons name="calendar-outline" size={14} color="#26D9CA" />
-                            <Text style={styles.metaText}>{course.total_weeks || 8} weeks</Text>
-                        </View>
-                    </View>
-
-                    {/* Progress indicator */}
-                    {progressPercentage > 0 && (
-                        <View style={styles.miniProgressContainer}>
-                            <View style={styles.miniProgressBar}>
-                                <View style={[styles.miniProgressFill, { width: `${progressPercentage}%` }]} />
-                            </View>
-                            <Text style={styles.miniProgressText}>{Math.round(progressPercentage)}%</Text>
+            <View style={styles.horizontalCourseCardShadow}>
+                <TouchableOpacity
+                    style={styles.horizontalCourseCard}
+                    onPress={() => navigateToCourse(course)}
+                    activeOpacity={0.8}
+                >
+                    {/* Card Image - Display actual image if available, otherwise placeholder */}
+                    {course.image ? (
+                        <Image
+                            source={{ uri: `data:image/jpeg;base64,${course.image}` }}
+                            style={styles.cardImagePlaceholder}
+                            resizeMode="cover"
+                        />
+                    ) : (
+                        <View style={[styles.cardImagePlaceholder, { backgroundColor: getCardColor(index) }]}>
+                            <Ionicons name="book-outline" size={28} color="white" />
                         </View>
                     )}
-                </View>
-            </TouchableOpacity>
+
+                    {/* Course Info */}
+                    <View style={styles.horizontalCardContent}>
+                        <View style={styles.cardBadge}>
+                            <Text style={styles.cardBadgeText}>
+                                {course.difficulty_level ? course.difficulty_level.charAt(0).toUpperCase() + course.difficulty_level.slice(1) : 'Course'}
+                            </Text>
+                        </View>
+
+                        <Text style={styles.horizontalCourseTitle} numberOfLines={2}>
+                            {course.title || 'Untitled Course'}
+                        </Text>
+
+                        <Text style={styles.horizontalCourseSubject} numberOfLines={1}>
+                            {course.subject || 'General'}
+                        </Text>
+
+                        {/* Meta Info */}
+                        <View style={styles.horizontalMetaRow}>
+                            <View style={styles.metaItem}>
+                                <Ionicons name="star" size={14} color="#FFB800" />
+                                <Text style={styles.metaText}>{progressPercentage >= 100 ? '5.0' : '4.9'}</Text>
+                                <Text style={styles.metaSubtext}>
+                                    ({course.total_weeks || 8} weeks)
+                                </Text>
+                            </View>
+                        </View>
+
+                        <View style={styles.horizontalMetaRow}>
+                            <View style={styles.metaItem}>
+                                <Ionicons name="time-outline" size={14} color="#26D9CA" />
+                                <Text style={styles.metaText}>{course.blocks_per_week || 2} modules</Text>
+                            </View>
+                            <View style={styles.metaItem}>
+                                <Ionicons name="calendar-outline" size={14} color="#26D9CA" />
+                                <Text style={styles.metaText}>{course.total_weeks || 8} weeks</Text>
+                            </View>
+                        </View>
+
+                        {/* Progress indicator */}
+                        {progressPercentage > 0 && (
+                            <View style={styles.miniProgressContainer}>
+                                <View style={styles.miniProgressBar}>
+                                    <View style={[styles.miniProgressFill, { width: `${progressPercentage}%` }]} />
+                                </View>
+                                <Text style={styles.miniProgressText}>{Math.round(progressPercentage)}%</Text>
+                            </View>
+                        )}
+                    </View>
+                </TouchableOpacity>
+            </View>
         );
     };
 
@@ -592,17 +600,13 @@ export const CourseHomepageScreen: React.FC<Props> = ({ navigation }) => {
                     {renderMainContent()}
                 </ScrollView>
 
-                {/* Subtle blur overlay for status bar area with gradient fade */}
+                {/* Subtle blur overlay for status bar area */}
                 <View style={styles.statusBarBlurContainer} pointerEvents="none">
                     <BlurView
                         intensity={3}
                         tint="light"
                         style={styles.statusBarBlur}
                     />
-                    {/* Multiple layers to create fade effect */}
-                    <View style={[styles.blurFadeLayer, { bottom: 0, height: 15, opacity: 0.6 }]} />
-                    <View style={[styles.blurFadeLayer, { bottom: 0, height: 10, opacity: 0.4 }]} />
-                    <View style={[styles.blurFadeLayer, { bottom: 0, height: 5, opacity: 0.3 }]} />
                 </View>
             </View>
         </TabBarWrapper>
@@ -616,11 +620,11 @@ const styles = StyleSheet.create({
     },
     fullscreenContainer: {
         flex: 1,
-        backgroundColor: '#ffffff',
+        backgroundColor: '#ffffffff',
     },
     scrollView: {
         flex: 1,
-        backgroundColor: '#ffffff',
+        backgroundColor: '#ffffffff',
     },
     statusBarBlurContainer: {
         position: 'absolute',
@@ -642,7 +646,8 @@ const styles = StyleSheet.create({
         position: 'absolute',
         left: 0,
         right: 0,
-        backgroundColor: '#ffffff02',
+        backgroundColor: 'transparent',
+        display: 'none',
     },
     loadingContainer: {
         flex: 1,
@@ -660,7 +665,7 @@ const styles = StyleSheet.create({
 
     // Header Styles
     headerContainer: {
-        backgroundColor: 'rgba(108, 71, 255, 0.62)',
+        backgroundColor: 'rgba(127, 125, 255, .8 )',
         borderTopLeftRadius: 30,
         borderTopRightRadius: 30,
         borderBottomLeftRadius: 30,
@@ -669,6 +674,11 @@ const styles = StyleSheet.create({
         paddingBottom: 30,
         paddingHorizontal: 20,
         marginTop: 10,
+        overflow: 'hidden',
+    },
+    headerBackgroundImage: {
+        borderRadius: 30,
+        opacity: 0.15,
     },
     topNav: {
         flexDirection: 'row',
@@ -680,7 +690,7 @@ const styles = StyleSheet.create({
         width: 40,
         height: 40,
         backgroundColor: 'rgba(255, 255, 255, 0.25)',
-        borderRadius: 12,
+        borderRadius: 20,
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -692,7 +702,7 @@ const styles = StyleSheet.create({
         width: 40,
         height: 40,
         backgroundColor: 'rgba(255, 255, 255, 0.25)',
-        borderRadius: 12,
+        borderRadius: 20,
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -710,13 +720,13 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         backgroundColor: '#FFFFFF',
-        borderRadius: 16,
+        borderRadius: 30,
         paddingHorizontal: 16,
         paddingVertical: 14,
         gap: 12,
     },
     searchBarBlur: {
-        borderRadius: 16,
+        borderRadius: 30,
         overflow: 'hidden',
         marginTop: 12,
     },
@@ -727,7 +737,7 @@ const styles = StyleSheet.create({
         paddingVertical: 12,
         gap: 12,
         backgroundColor: 'rgba(255,255,255,0.4)',
-        borderRadius: 16,
+        borderRadius: 30,
     },
     searchPlaceholder: {
         flex: 1,
@@ -738,7 +748,7 @@ const styles = StyleSheet.create({
         width: 36,
         height: 36,
         backgroundColor: '#F0F0F0',
-        borderRadius: 10,
+        borderRadius: 20,
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -779,7 +789,11 @@ const styles = StyleSheet.create({
     // Carousel Styles
     carouselSection: {
         marginTop: 24,
-        marginBottom: 16,
+        marginBottom: 24,
+        overflow: 'visible',
+        paddingBottom: 4,
+        borderTopWidth: 0,
+        borderBottomWidth: 0,
     },
     carouselHeader: {
         flexDirection: 'row',
@@ -800,21 +814,28 @@ const styles = StyleSheet.create({
     },
     carouselContent: {
         paddingHorizontal: 20,
+        paddingBottom: 32,
         gap: CARD_MARGIN,
     },
 
     // Horizontal Course Card Styles
-    horizontalCourseCard: {
+    horizontalCourseCardShadow: {
         width: CARD_WIDTH,
+        borderRadius: 18,
+        shadowColor: '#000000',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.13,
+        shadowRadius: 16,
+        elevation: 7,
+        backgroundColor: 'transparent',
+        marginBottom: 10,
+    },
+    horizontalCourseCard: {
+        width: '100%',
         backgroundColor: '#FFFFFF',
         borderRadius: 16,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.08,
-        shadowRadius: 8,
-        elevation: 3,
-        borderWidth: 1,
-        borderColor: 'rgba(0, 0, 0, 0.06)',
+        overflow: 'hidden',
+        borderWidth: 0,
     },
     cardImagePlaceholder: {
         width: '100%',
@@ -823,12 +844,11 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         borderTopLeftRadius: 16,
         borderTopRightRadius: 16,
-        borderBottomLeftRadius: 12,
-        borderBottomRightRadius: 12,
         overflow: 'hidden',
     },
     horizontalCardContent: {
         padding: 10,
+        paddingBottom: 12,
     },
     cardBadge: {
         backgroundColor: '#FFE9E0',

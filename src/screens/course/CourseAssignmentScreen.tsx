@@ -19,6 +19,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
 import * as ImagePicker from 'expo-image-picker';
 import {
@@ -75,6 +76,9 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
     const [uploadProgress, setUploadProgress] = useState(0);
     const [grading, setGrading] = useState(false);
     const [results, setResults] = useState<AISubmission | null>(null);
+    // Module lock (block progress) state
+    const [completedBlockIds, setCompletedBlockIds] = useState<Set<number>>(new Set());
+    const [blocksById, setBlocksById] = useState<Record<number, { block_number?: number; title?: string }>>({});
     // Remember block/lesson context for backend requirements
     const [contextLessonId, setContextLessonId] = useState<number | undefined>(undefined);
     const [contextBlockId, setContextBlockId] = useState<number | undefined>(undefined);
@@ -141,11 +145,12 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                 throw new Error('No authentication token available');
             }
 
-            // Load course assignments (student-specific) and raw assignment definitions (course-level)
-            const [courseData, assignmentsData, definitions] = await Promise.all([
+            // Load course assignments (student-specific), raw assignment definitions (course-level), and blocks progress for module locking
+            const [courseData, assignmentsData, definitions, blocksProgress] = await Promise.all([
                 afterSchoolService.getCourseDetails(courseId, token),
                 afterSchoolService.getCourseAssignments(courseId, token),
-                afterSchoolService.getCourseAssignmentDefinitions(courseId, token).catch(() => [])
+                afterSchoolService.getCourseAssignmentDefinitions(courseId, token).catch(() => []),
+                afterSchoolService.getCourseBlocksProgress(courseId, token).catch(() => null as any)
             ]);
 
             // Hydrate/merge student assignments with course-level definitions to ensure
@@ -207,6 +212,20 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
             setAssignments(hydratedAssignments);
             setRawAssignments(definitions);
 
+            // Capture blocks progress for module-lock checks
+            try {
+                if (blocksProgress && Array.isArray(blocksProgress.blocks)) {
+                    const byId: Record<number, { block_number?: number; title?: string }> = {};
+                    const done = new Set<number>();
+                    blocksProgress.blocks.forEach((b: any) => {
+                        byId[b.block_id] = { block_number: b.block_number, title: b.title };
+                        if (b.is_completed) done.add(b.block_id);
+                    });
+                    setBlocksById(byId);
+                    setCompletedBlockIds(done);
+                }
+            } catch { }
+
             // Prefer the explicitly locked selection (from Start/Retry) if present.
             const preferredId = lockedAssignmentIdRef.current ?? assignmentId ?? null;
             if (preferredId) {
@@ -224,24 +243,33 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                 }
             }
 
-            // Load statuses for all student assignments to enable per-assignment attempt tracking
-            const statusPromises = hydratedAssignments.map(async (assignment) => {
+            // Load statuses
+            if (preferredId) {
+                // Focused flow: only fetch the status for the selected assignment
                 try {
-                    const status = await afterSchoolService.getAssignmentStatus(assignment.assignment_id.toString(), token);
-                    return { assignmentId: assignment.assignment_id, status };
-                } catch {
-                    return null;
-                }
-            });
+                    const s = await afterSchoolService.getAssignmentStatus(preferredId.toString(), token);
+                    if (s) setAssignmentStatuses({ [preferredId]: s });
+                } catch { /* ignore */ }
+            } else {
+                // General flow: fetch for all (existing behavior)
+                const statusPromises = hydratedAssignments.map(async (assignment) => {
+                    try {
+                        const status = await afterSchoolService.getAssignmentStatus(assignment.assignment_id.toString(), token);
+                        return { assignmentId: assignment.assignment_id, status };
+                    } catch {
+                        return null;
+                    }
+                });
 
-            const statusResults = await Promise.all(statusPromises);
-            const statusMap: Record<number, AssignmentStatus> = {};
-            statusResults.forEach(result => {
-                if (result && result.status) {
-                    statusMap[result.assignmentId] = result.status;
-                }
-            });
-            setAssignmentStatuses(statusMap);
+                const statusResults = await Promise.all(statusPromises);
+                const statusMap: Record<number, AssignmentStatus> = {};
+                statusResults.forEach(result => {
+                    if (result && result.status) {
+                        statusMap[result.assignmentId] = result.status;
+                    }
+                });
+                setAssignmentStatuses(statusMap);
+            }
 
         } catch (error) {
             console.error('Error loading assignment data:', error);
@@ -328,6 +356,12 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
         const targetAssignment = assignment || currentAssignment;
         if (!targetAssignment) return;
 
+        // Respect module lock: block start if the related module is not completed
+        if (isAssignmentModuleLocked(targetAssignment)) {
+            showModuleLockGuide(targetAssignment);
+            return;
+        }
+
         // Lock selection so reloads don't switch the context
         lockedAssignmentIdRef.current = targetAssignment.assignment_id;
         setCurrentAssignment(targetAssignment);
@@ -343,6 +377,12 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
     const retryAssignment = async (assignmentParam?: StudentAssignment) => {
         const target = assignmentParam || currentAssignment;
         if (!target || !token) return;
+
+        // Respect module lock: block retry if the related module is not completed
+        if (isAssignmentModuleLocked(target)) {
+            showModuleLockGuide(target);
+            return;
+        }
 
         try {
             setGrading(true);
@@ -384,6 +424,29 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
         } finally {
             setGrading(false);
         }
+    };
+
+    // --- Module-lock helpers ---
+    const getAssignmentBlockId = (a: StudentAssignment): number | undefined => {
+        return (a.assignment?.block_id ?? (a as any)?.block_id) as number | undefined;
+    };
+
+    const isAssignmentModuleLocked = (a: StudentAssignment): boolean => {
+        // Prefer explicit backend flag if present, otherwise use blocks completion set
+        const backendLocked = (a as any)?.locked === true;
+        const bId = getAssignmentBlockId(a);
+        if (!bId) return backendLocked;
+        const done = completedBlockIds.has(bId);
+        return backendLocked || !done;
+    };
+
+    const showModuleLockGuide = (a: StudentAssignment) => {
+        const bId = getAssignmentBlockId(a);
+        const info = bId ? blocksById[bId] : undefined;
+        const msg = bId && info
+            ? `Complete Module ${info.block_number ?? ''}${info.block_number ? ' • ' : ''}${info.title ?? ''} to unlock this assignment.`
+            : 'Complete the required module to unlock this assignment.';
+        Alert.alert('Assignment Locked', msg, [{ text: 'OK' }]);
     };
 
     // Navigate to next workflow step
@@ -818,16 +881,13 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
     if (loading) {
         return (
             <SafeAreaView style={styles.container}>
-                <View style={styles.header}>
+                <View style={styles.topActions}>
                     <TouchableOpacity
-                        style={styles.backButton}
+                        style={styles.backIconButton}
                         onPress={() => navigation.goBack()}
                     >
-                        <Text style={styles.backButtonText}>← Back</Text>
+                        <Ionicons name="chevron-back" size={24} color="#333" />
                     </TouchableOpacity>
-                    <View style={styles.headerTitleContainer}>
-                        <Text style={styles.headerTitle}>Assignments</Text>
-                    </View>
                 </View>
                 <View style={styles.loadingContainer}>
                     <ActivityIndicator size="large" color="#007AFF" />
@@ -1175,6 +1235,11 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
         const isPassed = mappedStatus === 'passed';
         const hasMaxAttempts = mappedStatus === 'failed_no_retry';
 
+        // Module lock
+        const moduleLocked = isAssignmentModuleLocked(assignment);
+        const blockIdForLock = getAssignmentBlockId(assignment);
+        const blockInfo = blockIdForLock ? blocksById[blockIdForLock] : undefined;
+
         // Compute robust instruction fallback from raw definitions if nested assignment metadata is missing
         const fallbackDef = rawAssignments.find(d => d.id === (assignment.assignment?.id ?? assignment.assignment_id));
         const instructionText = assignment.assignment?.instructions
@@ -1353,7 +1418,7 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                                 Max Attempts Reached
                             </Text>
                         </TouchableOpacity>
-                    ) : canRetry ? (
+                    ) : canRetry && !moduleLocked ? (
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                             <TouchableOpacity
                                 style={[styles.submitButton, { backgroundColor: '#FD7E14', flex: 1, marginRight: 8 }]}
@@ -1373,7 +1438,14 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                                 <Text style={styles.viewButtonText}>View Last</Text>
                             </TouchableOpacity>
                         </View>
-                    ) : canStart ? (
+                    ) : canRetry && moduleLocked ? (
+                        <TouchableOpacity
+                            style={[styles.viewButton, { backgroundColor: '#f8f9fa', borderColor: '#eee' }]}
+                            disabled={true}
+                        >
+                            <Text style={[styles.viewButtonText, { color: '#6B7280' }]}>Locked — Complete Module</Text>
+                        </TouchableOpacity>
+                    ) : canStart && !moduleLocked ? (
                         <TouchableOpacity
                             style={styles.submitButton}
                             onPress={() => startAssignmentWorkflow(assignment)}
@@ -1381,6 +1453,13 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                             <Text style={styles.submitButtonText}>
                                 {mappedStatus === 'not_attempted' ? 'Start Assignment' : 'Continue Assignment'}
                             </Text>
+                        </TouchableOpacity>
+                    ) : canStart && moduleLocked ? (
+                        <TouchableOpacity
+                            style={[styles.viewButton, { backgroundColor: '#f8f9fa', borderColor: '#eee' }]}
+                            disabled={true}
+                        >
+                            <Text style={[styles.viewButtonText, { color: '#6B7280' }]}>Locked — Complete Module</Text>
                         </TouchableOpacity>
                     ) : (
                         <TouchableOpacity
@@ -1392,6 +1471,11 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                             </Text>
                         </TouchableOpacity>
                     )}
+                    {moduleLocked && (
+                        <Text style={{ marginTop: 8, fontSize: 12, color: '#6B7280', textAlign: 'center' }}>
+                            {blockInfo ? `Complete Module ${blockInfo.block_number ?? ''}${blockInfo.block_number ? ' • ' : ''}${blockInfo.title ?? ''} to unlock.` : 'Complete the required module to unlock.'}
+                        </Text>
+                    )}
                 </View>
             </View>
         );
@@ -1401,27 +1485,56 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
     if (workflowActive) {
         return (
             <SafeAreaView style={styles.container}>
+                <View style={styles.topActions}>
+                    <TouchableOpacity
+                        style={styles.backIconButton}
+                        onPress={() => navigation.goBack()}
+                    >
+                        <Ionicons name="chevron-back" size={24} color="#333" />
+                    </TouchableOpacity>
+                </View>
                 {renderWorkflowInterface()}
+            </SafeAreaView>
+        );
+    }
+
+    // Focused single-assignment details view when a specific assignmentId is provided
+    if (assignmentId && currentAssignment) {
+        return (
+            <SafeAreaView style={styles.container}>
+                <View style={styles.topActions}>
+                    <TouchableOpacity
+                        style={styles.backIconButton}
+                        onPress={() => navigation.goBack()}
+                    >
+                        <Ionicons name="chevron-back" size={24} color="#333" />
+                    </TouchableOpacity>
+                </View>
+                <ScrollView
+                    style={styles.scrollView}
+                    showsVerticalScrollIndicator={false}
+                    refreshControl={
+                        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+                    }
+                >
+                    <View style={styles.contentContainer}>
+                        {renderAssignmentCard(currentAssignment)}
+                    </View>
+                </ScrollView>
             </SafeAreaView>
         );
     }
 
     return (
         <SafeAreaView style={styles.container}>
-            {/* Header */}
-            <View style={styles.header}>
+            <View style={styles.topActions}>
                 <TouchableOpacity
-                    style={styles.backButton}
+                    style={styles.backIconButton}
                     onPress={() => navigation.goBack()}
                 >
-                    <Text style={styles.backButtonText}>← Back</Text>
+                    <Ionicons name="chevron-back" size={24} color="#333" />
                 </TouchableOpacity>
-                <View style={styles.headerTitleContainer}>
-                    <Text style={styles.headerTitle}>Assignments</Text>
-                    <Text style={styles.headerSubtitle} numberOfLines={1}>{courseTitle}</Text>
-                </View>
             </View>
-
             {renderTabNavigation()}
 
             <ScrollView
@@ -1448,11 +1561,13 @@ export const CourseAssignmentScreen: React.FC<Props> = ({ navigation, route }) =
                             <View style={{ marginBottom: 8 }}>
                                 <Text style={styles.sectionHeading}>Available Assignments ({availableDefinitionAdapters.length})</Text>
                                 {availableDefinitionAdapters.length > 0 ? (
-                                    availableDefinitionAdapters.map((a, idx) => (
-                                        <React.Fragment key={`available-${a?.id ?? a?.assignment_id ?? idx}`}>
-                                            {renderAssignmentCard(a)}
-                                        </React.Fragment>
-                                    ))
+                                    <>
+                                        {availableDefinitionAdapters.map((a, idx) => (
+                                            <React.Fragment key={`available-${a?.id ?? a?.assignment_id ?? idx}`}>
+                                                {renderAssignmentCard(a)}
+                                            </React.Fragment>
+                                        ))}
+                                    </>
                                 ) : (
                                     <Text style={{ fontSize: 13, color: '#666', marginTop: 4 }}>
                                         All available assignments have already been assigned to you.
@@ -1514,6 +1629,28 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: '#f8f9fa',
+    },
+    topActions: {
+        flexDirection: 'row',
+        justifyContent: 'flex-start',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingTop: 8,
+        paddingBottom: 8,
+        backgroundColor: 'transparent',
+    },
+    backIconButton: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: '#F8F9FC',
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 2,
+        elevation: 1,
     },
     sectionHeading: {
         fontSize: 16,

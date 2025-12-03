@@ -310,9 +310,7 @@ export const MyCoursesScreen: React.FC<Props> = ({ navigation }) => {
         return (
             <TabBarWrapper activeTab="courses" showTabs={true}>
                 <SafeAreaView style={styles.container}>
-                    <View style={styles.header}>
-                        <Text style={styles.headerTitle}>My Courses</Text>
-                    </View>
+                    <Text style={styles.headerTitle}>My Courses</Text>
                     <View style={styles.loadingContainer}>
                         <ActivityIndicator size="large" color="#007AFF" />
                         <Text style={styles.loadingText}>Loading your courses...</Text>
@@ -327,10 +325,8 @@ export const MyCoursesScreen: React.FC<Props> = ({ navigation }) => {
     return (
         <TabBarWrapper activeTab="courses" showTabs={true}>
             <SafeAreaView style={styles.container}>
-                {/* Header */}
-                <View style={styles.header}>
-                    <Text style={styles.headerTitle}>My Courses</Text>
-                </View>
+                {/* Title */}
+                <Text style={styles.headerTitle}>My Courses</Text>
 
                 {/* Filter Buttons */}
                 <View style={styles.filterButtonsContainer}>
@@ -425,20 +421,13 @@ const styles = StyleSheet.create({
     scrollView: {
         flex: 1,
     },
-    header: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingHorizontal: 20,
-        paddingVertical: 16,
-        backgroundColor: '#fff',
-        borderBottomWidth: 1,
-        borderBottomColor: '#e0e0e0',
-    },
     headerTitle: {
-        fontSize: 20,
+        fontSize: 22,
         fontWeight: 'bold',
         color: '#1a1a1a',
+        textAlign: 'center',
+        paddingVertical: 16,
+        backgroundColor: '#f8f9fa',
     },
     loadingContainer: {
         flex: 1,
@@ -453,26 +442,23 @@ const styles = StyleSheet.create({
     },
     filterButtonsContainer: {
         flexDirection: 'row',
-        backgroundColor: '#fff',
         paddingHorizontal: 20,
-        paddingVertical: 12,
+        paddingBottom: 16,
         gap: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: '#e0e0e0',
     },
     filterTab: {
         flex: 1,
-        paddingVertical: 10,
+        paddingVertical: 12,
         paddingHorizontal: 16,
-        backgroundColor: '#f0f0f0',
-        borderRadius: 8,
+        backgroundColor: '#E8E8E8',
+        borderRadius: 25,
         alignItems: 'center',
     },
     filterTabActive: {
         backgroundColor: '#007AFF',
     },
     filterTabText: {
-        fontSize: 14,
+        fontSize: 15,
         fontWeight: '600',
         color: '#666',
     },

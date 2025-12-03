@@ -36,6 +36,7 @@ import { UploadHistoryScreen } from '../screens/uploads/UploadHistoryScreen';
 import { NotesListScreen } from '../screens/notes/NotesListScreen';
 import { NoteDetailsScreen } from '../screens/notes/NoteDetailsScreen';
 import { UploadNoteScreen } from '../screens/notes/UploadNoteScreen';
+import { ObjectiveDetailsScreen } from '../screens/notes/ObjectiveDetailsScreen';
 
 // Notifications Management Screens
 import {
@@ -47,6 +48,10 @@ import {
 // Main Tab Container
 import { MainTabContainer } from '../components/MainTabContainer';
 import EditProfileScreen from '../screens/EditProfileScreen';
+import { QuizScreen } from '../screens/Quiz';
+import FlashcardsScreen from '../screens/Flashcards';
+import VideoPlayerScreen from '../screens/VideoPlayer';
+import ObjectiveQuizScreen from '../screens/notes/ObjectiveQuizScreen';
 
 export type RootStackParamList = {
     Login: undefined;
@@ -128,12 +133,18 @@ export type RootStackParamList = {
     NotesList: undefined;
     NoteDetails: { noteId: number };
     UploadNote: undefined;
+    ObjectiveDetails: { noteId: number; objectiveIndex: number };
+    Flashcards: { mode: 'objective'; noteId: number; objectiveIndex: number; title?: string; flashcardsPayload?: any };
+    VideoPlayer: { url: string; title?: string };
+    ObjectiveQuiz: { noteId: number; objectiveIndex: number; title?: string; quizPayload?: any };
     // Notifications Management
     Notifications: undefined;
     NotificationDetail: { notification: any };
     NotificationSettings: undefined;
     // Profile
     EditProfile: undefined;
+    // Ephemeral Practice Quiz (assignment/block/note)
+    Quiz: { mode: 'assignment' | 'block' | 'note'; id: number; title?: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -288,6 +299,45 @@ export const AppNavigator: React.FC = () => {
                         gestureDirection: 'vertical',
                     }}
                 />
+                <Stack.Screen
+                    name="ObjectiveDetails"
+                    component={ObjectiveDetailsScreen}
+                    options={{
+                        animation: 'slide_from_right',
+                        gestureEnabled: true,
+                    }}
+                />
+                <Stack.Screen
+                    name="Flashcards"
+                    component={FlashcardsScreen}
+                    options={{
+                        presentation: 'modal',
+                        animation: 'slide_from_bottom',
+                        gestureEnabled: true,
+                        gestureDirection: 'vertical',
+                    }}
+                />
+                <Stack.Screen
+                    name="ObjectiveQuiz"
+                    component={ObjectiveQuizScreen}
+                    options={{
+                        presentation: 'modal',
+                        animation: 'slide_from_bottom',
+                        gestureEnabled: true,
+                        gestureDirection: 'vertical',
+                    }}
+                />
+                <Stack.Screen
+                    name="VideoPlayer"
+                    component={VideoPlayerScreen}
+                    options={{
+                        presentation: 'modal',
+                        animation: 'slide_from_bottom',
+                        gestureEnabled: true,
+                        gestureDirection: 'vertical',
+                    }}
+                />
+
 
                 {/* Notifications Management Screens */}
                 <Stack.Screen
@@ -309,6 +359,17 @@ export const AppNavigator: React.FC = () => {
                     options={{
                         animation: 'slide_from_right',
                         gestureEnabled: true,
+                    }}
+                />
+                {/* Ephemeral Practice Quiz Modal */}
+                <Stack.Screen
+                    name="Quiz"
+                    component={QuizScreen}
+                    options={{
+                        presentation: 'modal',
+                        animation: 'slide_from_bottom',
+                        gestureEnabled: true,
+                        gestureDirection: 'vertical',
                     }}
                 />
             </Stack.Navigator>

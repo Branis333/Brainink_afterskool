@@ -18,6 +18,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { profileService, User, UpdateProfileRequest } from '../services/profileService';
 import { afterSchoolService, StudentDashboard, Course } from '../services/afterSchoolService';
@@ -159,60 +160,21 @@ export const ProfileScreen: React.FC<Props> = ({ navigation }) => {
                     <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
                 }
             >
-                {/* Header */}
-                <View style={styles.header}>
-                    <Text style={styles.headerTitle}>Profile</Text>
+                {/* Settings Button */}
+                <View style={styles.settingsButtonContainer}>
                     <TouchableOpacity
-                        style={styles.editButton}
+                        style={styles.settingsButton}
                         onPress={() => navigation.navigate('EditProfile' as never)}
                     >
-                        <Text style={styles.editButtonText}>Edit</Text>
+                        <Ionicons name="settings-outline" size={28} color="#007AFF" />
                     </TouchableOpacity>
                 </View>
 
-                {/* Account Information (read-only) */}
-                <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Account Information</Text>
-                    <View style={styles.readOnlyRow}>
-                        <Text style={styles.label}>Username</Text>
-                        <Text style={styles.valueText}>{profileData?.username || user?.username || '—'}</Text>
-                    </View>
-                    <View style={styles.readOnlyRow}>
-                        <Text style={styles.label}>Email</Text>
-                        <Text style={styles.valueText}>{profileData?.email || user?.email || '—'}</Text>
-                    </View>
-                </View>
-
-                {/* Account Status */}
-                <View style={styles.section}>
-                    <Text style={styles.sectionTitle}>Account Status</Text>
-
-                    <View style={styles.statusItem}>
-                        <Text style={styles.statusLabel}>Account Active</Text>
-                        <View style={[styles.statusBadge, profileData?.is_active ? styles.activeBadge : styles.inactiveBadge]}>
-                            <Text style={[styles.statusText, profileData?.is_active ? styles.activeText : styles.inactiveText]}>
-                                {profileData?.is_active ? 'Active' : 'Inactive'}
-                            </Text>
-                        </View>
-                    </View>
-
-                    <View style={styles.statusItem}>
-                        <Text style={styles.statusLabel}>Email Verified</Text>
-                        <View style={[styles.statusBadge, profileData?.email_confirmed ? styles.activeBadge : styles.inactiveBadge]}>
-                            <Text style={[styles.statusText, profileData?.email_confirmed ? styles.activeText : styles.inactiveText]}>
-                                {profileData?.email_confirmed ? 'Verified' : 'Unverified'}
-                            </Text>
-                        </View>
-                    </View>
-
-                    {profileData?.created_at && (
-                        <View style={styles.statusItem}>
-                            <Text style={styles.statusLabel}>Member Since</Text>
-                            <Text style={styles.statusValue}>
-                                {new Date(profileData.created_at).toLocaleDateString()}
-                            </Text>
-                        </View>
-                    )}
+                {/* Profile Title and User Info */}
+                <View style={styles.profileHeader}>
+                    <Text style={styles.headerTitle}>Profile</Text>
+                    <Text style={styles.userName}>{profileData?.username || user?.username || '—'}</Text>
+                    <Text style={styles.userEmail}>{profileData?.email || user?.email || '—'}</Text>
                 </View>
 
                 {/* User Statistics */}
@@ -284,30 +246,44 @@ const styles = StyleSheet.create({
         fontSize: 16,
         color: '#666',
     },
-    header: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        padding: 20,
+    settingsButtonContainer: {
+        alignItems: 'flex-end',
+        paddingHorizontal: 20,
+        paddingTop: 10,
+    },
+    settingsButton: {
+        width: 50,
+        height: 50,
+        borderRadius: 25,
         backgroundColor: '#fff',
-        borderBottomWidth: 1,
-        borderBottomColor: '#e5e7eb',
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
+    },
+    profileHeader: {
+        paddingHorizontal: 20,
+        paddingTop: 16,
+        paddingBottom: 20,
     },
     headerTitle: {
-        fontSize: 24,
+        fontSize: 28,
         fontWeight: 'bold',
         color: '#1a1a1a',
+        marginBottom: 8,
     },
-    editButton: {
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        backgroundColor: '#007AFF',
-        borderRadius: 8,
-    },
-    editButtonText: {
-        color: '#fff',
-        fontSize: 14,
+    userName: {
+        fontSize: 18,
         fontWeight: '600',
+        color: '#1a1a1a',
+        marginBottom: 4,
+    },
+    userEmail: {
+        fontSize: 16,
+        color: '#666',
     },
     section: {
         backgroundColor: '#fff',

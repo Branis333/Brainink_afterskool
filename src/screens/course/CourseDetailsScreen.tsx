@@ -15,6 +15,7 @@ import {
     ActivityIndicator,
     Dimensions,
     Image,
+    Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -32,6 +33,7 @@ import {
     CourseAssignment
 } from '../../services/afterSchoolService';
 import { gradesService } from '../../services/gradesService';
+import { progressService, ProgressDigest } from '../../services/progressService';
 
 type NavigationProp = NativeStackNavigationProp<any>;
 type RouteProp_ = RouteProp<{ params: { courseId: number; courseTitle: string } }>;
@@ -62,6 +64,10 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
     const [activeBlockSessions, setActiveBlockSessions] = useState<Record<number, { id: number, status: string }>>({}); // blockId -> {sessionId, status}
     const [expandedWeeks, setExpandedWeeks] = useState<Record<number, boolean>>({}); // weekNumber -> isExpanded
     const [selectedWeek, setSelectedWeek] = useState<number>(1); // For horizontal week selection
+    const [courseDigest, setCourseDigest] = useState<ProgressDigest | null>(null);
+    const [digestUpdating, setDigestUpdating] = useState(false);
+    const [lockModalVisible, setLockModalVisible] = useState(false);
+    const [lockModalAssignment, setLockModalAssignment] = useState<EnrichedAssignment | null>(null);
 
     // Load course data
     const inFlightRef = React.useRef<Promise<void> | null>(null);
@@ -78,13 +84,14 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 return; // prevent duplicate load
             }
             inFlightRef.current = (async () => {
-                // Load unified course & progress in parallel
-                const [courseData, progressData] = await Promise.all([
+                // Load unified course, progress, and course digest in parallel
+                const [courseData, progressData, digestData] = await Promise.all([
                     afterSchoolService.getUnifiedCourse(courseId, token, {
                         include_stats: true,
                         include_progress: true
                     }),
-                    afterSchoolService.getStudentProgress(courseId, token).catch(() => null)
+                    afterSchoolService.getStudentProgress(courseId, token).catch(() => null),
+                    progressService.getCourseDigest(courseId, token).catch(() => null)
                 ]);
 
                 setCourse(courseData);
@@ -98,6 +105,7 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 }
 
                 setProgress(progressData);
+                setCourseDigest(digestData);
                 // NOTE: Do NOT set isEnrolled based on progress data alone - progress can exist for non-enrolled users
                 // Enrollment should only be determined by StudentAssignment presence (checked in loadAssignments)
                 try {
@@ -358,6 +366,70 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         });
     };
 
+    // Open grade details for the latest submission of an assignment
+    const openGradeDetails = async (assignment: StudentAssignment) => {
+        try {
+            if (!token) return;
+            const latest = await gradesService.findLatestSubmissionForAssignment(
+                assignment.assignment_id,
+                token
+            );
+            if (latest) {
+                navigation.navigate('GradeDetails', {
+                    submissionId: latest.id,
+                    submissionType: latest.submission_type as any,
+                });
+            } else {
+                Alert.alert(
+                    'No results yet',
+                    'We could not find a graded submission yet. Please try again shortly.'
+                );
+            }
+        } catch (e) {
+            Alert.alert('Error', 'Unable to open grade details right now.');
+        }
+    };
+
+    // Lock modal helpers
+    const showLockModal = (assignment: EnrichedAssignment) => {
+        setLockModalAssignment(assignment);
+        setLockModalVisible(true);
+    };
+    const hideLockModal = () => {
+        setLockModalVisible(false);
+        setLockModalAssignment(null);
+    };
+    const goToRequiredAssignment = () => {
+        if (!lockModalAssignment?.required_assignment_id) {
+            hideLockModal();
+            return;
+        }
+        const requiredId = lockModalAssignment.required_assignment_id;
+        hideLockModal();
+        navigation.navigate('CourseAssignment', {
+            courseId,
+            assignmentId: requiredId,
+            assignmentTitle: `Assignment #${requiredId}`,
+            courseTitle
+        });
+    };
+
+    // Handle press on a minimal row with branching logic
+    const handleAssignmentPress = (assignment: EnrichedAssignment) => {
+        const { locked, passed, failed } = computeAssignmentState(assignment);
+        if (locked) {
+            showLockModal(assignment);
+            return;
+        }
+        if (passed || failed) {
+            // Both passed and attempted-but-not-passed go to grade details
+            openGradeDetails(assignment);
+            return;
+        }
+        // Ready to view details/start
+        navigateToAssignment(assignment);
+    };
+
     // Format duration
     const formatDuration = (minutes: number): string => {
         if (minutes < 60) {
@@ -367,6 +439,44 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         const remainingMinutes = minutes % 60;
         return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
     };
+
+    // Helpers and derived maps (hoisted before early returns to satisfy Hooks rules)
+    const getBlockDefinitionsSorted = (blockId: number): CourseAssignment[] => {
+        const defs = rawAssignments.filter(d => (d.block_id ?? 0) === blockId);
+        // Sort by created_at then id as fallback to maintain curriculum order
+        return defs.sort((x, y) => {
+            const tx = x.created_at ? new Date(x.created_at).getTime() : 0;
+            const ty = y.created_at ? new Date(y.created_at).getTime() : 0;
+            if (tx !== ty) return tx - ty;
+            return (x.id ?? 0) - (y.id ?? 0);
+        });
+    };
+
+    // Precompute previous-definition map per block to ensure stable curriculum order
+    const prevDefinitionMap = React.useMemo(() => {
+        const map: Record<number, number | null> = {}; // definitionId -> previousDefinitionId|null
+        const byId: Set<number> = new Set(rawAssignments.map(d => d.id));
+        const blocksSet = new Set(rawAssignments.map(d => d.block_id).filter(Boolean) as number[]);
+        blocksSet.forEach(bId => {
+            const sorted = getBlockDefinitionsSorted(bId);
+            sorted.forEach((def, idx) => {
+                const prev = idx > 0 ? sorted[idx - 1].id : null;
+                if (byId.has(def.id)) {
+                    map[def.id] = prev;
+                }
+            });
+        });
+        return map;
+    }, [rawAssignments]);
+
+    const studentAssignmentByDefinitionId = React.useMemo(() => {
+        const m: Record<number, StudentAssignment> = {};
+        assignments.forEach(sa => {
+            const defId = sa.assignment?.id ?? sa.assignment_id;
+            if (defId) m[defId] = sa;
+        });
+        return m;
+    }, [assignments]);
 
     // Render loading state
     if (loading) {
@@ -764,15 +874,107 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
     const renderProgressContent = () => {
         if (!progress) {
             return (
-                <View style={styles.emptyContainer}>
-                    <Text style={styles.emptyText}>No progress data</Text>
-                    <Text style={styles.emptySubtext}>Start studying to track your progress</Text>
+                <View style={styles.contentContainer}>
+                    {/* Course Progress Digest (top card) */}
+                    <View style={styles.progressDigestCard}>
+                        <Text style={styles.progressDigestTitle}>Course Progress</Text>
+                        {courseDigest ? (
+                            <>
+                                <Text style={styles.progressDigestSummary}>{courseDigest.summary}</Text>
+                                <View style={styles.progressDigestMetaRow}>
+                                    <Text style={styles.progressDigestMeta}>
+                                        {new Date(courseDigest.period_start).toLocaleDateString()} - {new Date(courseDigest.period_end).toLocaleDateString()}
+                                    </Text>
+                                    <Text style={styles.progressDigestMeta}>• {courseDigest.assignments_count} items</Text>
+                                    {typeof courseDigest.avg_grade === 'number' && (
+                                        <Text style={styles.progressDigestMeta}>• {courseDigest.avg_grade.toFixed(1)}% avg</Text>
+                                    )}
+                                </View>
+                            </>
+                        ) : (
+                            <Text style={styles.progressDigestSummaryMuted}>
+                                No course progress yet. Tap Update to generate.
+                            </Text>
+                        )}
+                        <TouchableOpacity
+                            style={styles.progressDigestUpdateButton}
+                            onPress={async () => {
+                                if (!token) return;
+                                try {
+                                    setDigestUpdating(true);
+                                    const updated = await progressService.generateCourseDigest(courseId, token);
+                                    setCourseDigest(updated);
+                                } catch (e) {
+                                    Alert.alert('Error', 'Failed to update course progress.');
+                                } finally {
+                                    setDigestUpdating(false);
+                                }
+                            }}
+                            disabled={digestUpdating}
+                        >
+                            {digestUpdating ? (
+                                <ActivityIndicator color="#FFFFFF" size="small" />
+                            ) : (
+                                <Text style={styles.progressDigestUpdateButtonText}>Update progress</Text>
+                            )}
+                        </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.emptyContainer}>
+                        <Text style={styles.emptyText}>No progress data</Text>
+                        <Text style={styles.emptySubtext}>Start studying to track your progress</Text>
+                    </View>
                 </View>
             );
         }
 
         return (
             <View style={styles.contentContainer}>
+                {/* Course Progress Digest (top card) */}
+                <View style={styles.progressDigestCard}>
+                    <Text style={styles.progressDigestTitle}>Course Progress</Text>
+                    {courseDigest ? (
+                        <>
+                            <Text style={styles.progressDigestSummary}>{courseDigest.summary}</Text>
+                            <View style={styles.progressDigestMetaRow}>
+                                <Text style={styles.progressDigestMeta}>
+                                    {new Date(courseDigest.period_start).toLocaleDateString()} - {new Date(courseDigest.period_end).toLocaleDateString()}
+                                </Text>
+                                <Text style={styles.progressDigestMeta}>• {courseDigest.assignments_count} items</Text>
+                                {typeof courseDigest.avg_grade === 'number' && (
+                                    <Text style={styles.progressDigestMeta}>• {courseDigest.avg_grade.toFixed(1)}% avg</Text>
+                                )}
+                            </View>
+                        </>
+                    ) : (
+                        <Text style={styles.progressDigestSummaryMuted}>
+                            No course progress yet. Tap Update to generate.
+                        </Text>
+                    )}
+                    <TouchableOpacity
+                        style={styles.progressDigestUpdateButton}
+                        onPress={async () => {
+                            if (!token) return;
+                            try {
+                                setDigestUpdating(true);
+                                const updated = await progressService.generateCourseDigest(courseId, token);
+                                setCourseDigest(updated);
+                            } catch (e) {
+                                Alert.alert('Error', 'Failed to update course progress.');
+                            } finally {
+                                setDigestUpdating(false);
+                            }
+                        }}
+                        disabled={digestUpdating}
+                    >
+                        {digestUpdating ? (
+                            <ActivityIndicator color="#FFFFFF" size="small" />
+                        ) : (
+                            <Text style={styles.progressDigestUpdateButtonText}>Update progress</Text>
+                        )}
+                    </TouchableOpacity>
+                </View>
+
                 <View style={styles.progressDetailCard}>
                     <Text style={styles.progressDetailTitle}>Study Statistics</Text>
                     <View style={styles.progressDetailGrid}>
@@ -882,6 +1084,146 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         );
     };
 
+    // --- Minimal Assignment Row (Updated UI) ---
+    const PASS_THRESHOLD = 80;
+    interface EnrichedAssignment extends StudentAssignment { locked?: boolean; required_assignment_id?: number | null; }
+
+    const isBlockLocked = (a: EnrichedAssignment): { locked: boolean; blockId?: number } => {
+        // Prefer nested assignment.block_id, fall back to course-level definition.block_id
+        const def = resolveAssignmentDefinition(a as unknown as StudentAssignment);
+        const blockId = (a.assignment?.block_id ?? (a as any)?.block_id ?? def?.block_id) as number | undefined;
+        if (!blockId) return { locked: false };
+        const status = activeBlockSessions[blockId]?.status;
+        // Lock when correlating module is not completed
+        const locked = status !== 'completed';
+        return { locked, blockId };
+    };
+
+    // Helpers for previous-assignment gating
+    const getAssignmentBlockId = (a: EnrichedAssignment): number | undefined => {
+        const def = resolveAssignmentDefinition(a as unknown as StudentAssignment);
+        return (a.assignment?.block_id ?? (a as any)?.block_id ?? def?.block_id) as number | undefined;
+    };
+
+    // (hoisted) getBlockDefinitionsSorted, prevDefinitionMap, and studentAssignmentByDefinitionId
+
+    const isStudentPassed = (sa?: StudentAssignment | null): boolean => {
+        if (!sa) return false;
+        const g = typeof sa.grade === 'number' ? sa.grade : undefined;
+        if (sa.status === 'passed') return true;
+        if (g !== undefined && g >= PASS_THRESHOLD) return true;
+        return false;
+    };
+
+    const computeAssignmentState = (a: EnrichedAssignment) => {
+        const blockGate = isBlockLocked(a);
+        const def = resolveAssignmentDefinition(a as unknown as StudentAssignment);
+        const currentDefId = def?.id ?? a.assignment_id;
+        const blockId = getAssignmentBlockId(a);
+
+        // Try precomputed previous; if missing, fall back to sorted-by-block resolution
+        let prevDefId = currentDefId ? prevDefinitionMap[currentDefId] : null as number | null | undefined;
+        if (prevDefId === undefined && currentDefId && blockId) {
+            const sorted = getBlockDefinitionsSorted(blockId);
+            const idx = sorted.findIndex(d => d.id === currentDefId);
+            prevDefId = idx > 0 ? sorted[idx - 1].id : null;
+        }
+
+        // Also consider backend-declared prerequisite if provided
+        const backendReqId = (a as any)?.required_assignment_id as number | undefined;
+        const candidatePrevIds: number[] = [];
+        if (typeof prevDefId === 'number') candidatePrevIds.push(prevDefId);
+        if (typeof backendReqId === 'number' && !candidatePrevIds.includes(backendReqId)) candidatePrevIds.push(backendReqId);
+
+        let prevLocked = false;
+        let prevDef: CourseAssignment | undefined = undefined;
+        for (const pid of candidatePrevIds) {
+            const pDef = rawAssignments.find(d => d.id === pid);
+            const pStudent = pDef ? studentAssignmentByDefinitionId[pDef.id] : undefined;
+            const passed = isStudentPassed(pStudent);
+            if (!passed) {
+                prevLocked = true;
+                prevDef = pDef || prevDef; // prefer the first unmet prerequisite for UI text
+                break;
+            }
+        }
+
+        // Prefer backend lock flag when present, and lock if module incomplete or prev unmet
+        const locked = !!a.locked || blockGate.locked || prevLocked;
+        const gradeVal = typeof a.grade === 'number' ? a.grade : undefined;
+        const passed = a.status === 'passed' || (gradeVal !== undefined && gradeVal >= PASS_THRESHOLD);
+        const attempted = ['submitted', 'graded', 'needs_retry', 'failed', 'passed'].includes(a.status);
+        const failed = attempted && !passed && (a.status === 'failed' || a.status === 'needs_retry' || (gradeVal !== undefined && gradeVal < PASS_THRESHOLD));
+        let icon: { name: string; color: string } = { name: 'document-text-outline', color: '#6B7280' };
+        if (locked) icon = { name: 'lock-closed', color: '#6B7280' };
+        else if (passed) icon = { name: 'checkmark-circle', color: '#10B981' };
+        else if (failed) icon = { name: 'alert-circle', color: '#EF4444' };
+        const statusText = locked ? 'Locked' : passed ? 'Completed' : failed ? 'Needs Retry' : a.status === 'assigned' ? 'Assigned' : 'In Progress';
+        return { locked, passed, failed, icon, statusText, gradeVal, blockGate, prevGate: { locked: prevLocked, prevDef } };
+    };
+
+    const formatShortDate = (iso: string) => {
+        try {
+            const d = new Date(iso);
+            return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short' });
+        } catch { return ''; }
+    };
+
+    const renderMinimalAssignmentRow = (assignment: EnrichedAssignment, idx: number) => {
+        const state = computeAssignmentState(assignment);
+        const title = getAssignmentTitle(assignment);
+        const due = formatShortDate(assignment.due_date);
+        const duration = getAssignmentDuration(assignment);
+        const gradeDisplay = state.gradeVal !== undefined ? `${state.gradeVal.toFixed(1)}%` : '—';
+        const showNote = state.failed || state.locked;
+        const noteText = state.failed
+            ? "You didn't pass this item"
+            : state.locked
+                ? (state.prevGate?.locked && state.prevGate.prevDef
+                    ? `Complete "${state.prevGate.prevDef.title}" to unlock`
+                    : (assignment.required_assignment_id
+                        ? `Unlock by completing #${assignment.required_assignment_id}`
+                        : (state.blockGate.blockId
+                            ? 'Complete the module to unlock'
+                            : 'Prerequisite incomplete')))
+                : '';
+        return (
+            <TouchableOpacity
+                key={`assign-row-${assignment.assignment_id}-${idx}`}
+                style={[styles.assignmentRow, state.locked && styles.assignmentRowLocked]}
+                onPress={() => handleAssignmentPress(assignment)}
+            >
+                <View style={styles.assignmentRowIconWrap}>
+                    {state.locked ? (
+                        <TouchableOpacity onPress={() => showLockModal(assignment)} activeOpacity={0.7}>
+                            <View style={styles.lockIconBadge}>
+                                <Ionicons name="lock-closed" size={16} color="#6B7280" />
+                            </View>
+                        </TouchableOpacity>
+                    ) : (
+                        <Ionicons name={state.icon.name as any} size={22} color={state.icon.color} />
+                    )}
+                </View>
+                <View style={styles.assignmentRowContent}>
+                    <View style={styles.assignmentRowTop}>
+                        <Text style={styles.assignmentRowTitle} numberOfLines={1}>{title}</Text>
+                        <Text style={[styles.assignmentRowGrade, state.passed && { color: '#10B981' }, state.failed && { color: '#EF4444' }]}>{gradeDisplay}</Text>
+                    </View>
+                    <View style={styles.assignmentRowMetaLine}>
+                        <Text style={styles.assignmentRowMeta} numberOfLines={1}>
+                            {state.statusText}
+                            {due ? ` · Due ${due}` : ''}
+                            {duration ? ` · ${duration} min` : ''}
+                        </Text>
+                    </View>
+                    {showNote && (
+                        <Text style={styles.assignmentRowNote} numberOfLines={1}>{noteText}</Text>
+                    )}
+                </View>
+            </TouchableOpacity>
+        );
+    };
+
     // Render assignments tab content
     const adaptDefinition = (definition: CourseAssignment): StudentAssignment => ({
         id: definition.id,
@@ -942,28 +1284,14 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 {hasStudent && (
                     <View style={{ marginBottom: 16 }}>
                         <Text style={styles.sectionHeading}>Your Assigned Work ({assignments.length})</Text>
-                        {assignments.map((a, idx) => {
-                            const safeKey = a?.id ?? a?.assignment_id ?? a?.assignment?.id ?? `idx-${idx}`;
-                            return (
-                                <View key={`student-assignment-${safeKey}`}>
-                                    {renderAssignmentCard(a)}
-                                </View>
-                            );
-                        })}
+                        {assignments.map((a, idx) => renderMinimalAssignmentRow(a as EnrichedAssignment, idx))}
                     </View>
                 )}
                 {hasDefinitions && (
                     <View style={{ marginBottom: 8 }}>
                         <Text style={styles.sectionHeading}>Available Assignments ({availableDefinitionAdapters.length})</Text>
                         {availableDefinitionAdapters.length > 0 ? (
-                            availableDefinitionAdapters.map((a, idx) => {
-                                const safeKey = a?.id ?? a?.assignment_id ?? a?.assignment?.id ?? `idx-${idx}`;
-                                return (
-                                    <View key={`available-assignment-${safeKey}`}>
-                                        {renderAssignmentCard(a)}
-                                    </View>
-                                );
-                            })
+                            availableDefinitionAdapters.map((a, idx) => renderMinimalAssignmentRow(a as EnrichedAssignment, idx))
                         ) : (
                             <Text style={{ fontSize: 13, color: '#666', marginTop: 4 }}>
                                 All available assignments have already been assigned to you.
@@ -990,6 +1318,57 @@ export const CourseDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 {activeTab === 'progress' && renderProgressContent()}
                 {activeTab === 'assignments' && renderAssignmentsContent()}
             </ScrollView>
+
+            {/* Lock Modal */}
+            <Modal
+                visible={lockModalVisible}
+                transparent
+                animationType="fade"
+                onRequestClose={hideLockModal}
+            >
+                <View style={styles.lockModalOverlay}>
+                    <View style={styles.lockModalCard}>
+                        <View style={{ alignItems: 'center', marginBottom: 12 }}>
+                            <Ionicons name="lock-closed" size={28} color="#6B7280" />
+                        </View>
+                        <Text style={styles.lockModalTitle}>Assignment Locked</Text>
+                        <Text style={styles.lockModalText}>
+                            {(() => {
+                                if (!lockModalAssignment) return 'Please complete the required prerequisite to unlock this item.';
+                                // Prefer specific prerequisite assignment if provided
+                                if (lockModalAssignment.required_assignment_id) {
+                                    return `Complete assignment #${lockModalAssignment.required_assignment_id} to unlock this item.`;
+                                }
+                                // Check dynamic gating reasons
+                                const st = computeAssignmentState(lockModalAssignment as EnrichedAssignment);
+                                if (st.prevGate?.locked && st.prevGate.prevDef) {
+                                    return `Complete "${st.prevGate.prevDef.title}" to unlock this assignment.`;
+                                }
+                                const def = resolveAssignmentDefinition(lockModalAssignment as unknown as StudentAssignment);
+                                const bId = (lockModalAssignment.assignment?.block_id ?? (lockModalAssignment as any)?.block_id ?? def?.block_id) as number | undefined;
+                                if (bId) {
+                                    const b = blocks.find(x => x.id === bId);
+                                    if (b) {
+                                        return `Complete Module ${b.block_number} • ${b.title} to unlock this assignment.`;
+                                    }
+                                    return 'Complete the related module to unlock this assignment.';
+                                }
+                                return 'Please complete the required prerequisite to unlock this item.';
+                            })()}
+                        </Text>
+                        <View style={styles.lockModalActions}>
+                            <TouchableOpacity style={styles.lockModalButton} onPress={hideLockModal}>
+                                <Text style={styles.lockModalButtonText}>Close</Text>
+                            </TouchableOpacity>
+                            {lockModalAssignment?.required_assignment_id ? (
+                                <TouchableOpacity style={styles.lockModalPrimaryButton} onPress={goToRequiredAssignment}>
+                                    <Text style={styles.lockModalPrimaryButtonText}>View Required</Text>
+                                </TouchableOpacity>
+                            ) : null}
+                        </View>
+                    </View>
+                </View>
+            </Modal>
         </SafeAreaView>
     );
 };
@@ -1567,6 +1946,60 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#666',
     },
+    // Course progress digest card
+    progressDigestCard: {
+        backgroundColor: '#fff',
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 16,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 2,
+        borderLeftWidth: 4,
+        borderLeftColor: '#10B981',
+    },
+    progressDigestTitle: {
+        fontSize: 18,
+        fontWeight: 'bold',
+        color: '#1a1a1a',
+        marginBottom: 8,
+    },
+    progressDigestSummary: {
+        fontSize: 14,
+        color: '#111827',
+        lineHeight: 20,
+        marginBottom: 10,
+    },
+    progressDigestSummaryMuted: {
+        fontSize: 14,
+        color: '#6B7280',
+        fontStyle: 'italic',
+        marginBottom: 10,
+    },
+    progressDigestMetaRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 6,
+        marginBottom: 8,
+    },
+    progressDigestMeta: {
+        fontSize: 12,
+        color: '#6B7280',
+    },
+    progressDigestUpdateButton: {
+        alignSelf: 'flex-end',
+        backgroundColor: '#10B981',
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderRadius: 8,
+    },
+    progressDigestUpdateButtonText: {
+        color: '#FFFFFF',
+        fontSize: 13,
+        fontWeight: '600',
+    },
     assignmentCard: {
         backgroundColor: '#fff',
         borderRadius: 12,
@@ -1720,5 +2153,131 @@ const styles = StyleSheet.create({
         fontSize: 12,
         color: '#666',
         lineHeight: 16,
+    },
+    // Minimal Assignment Rows
+    assignmentRow: {
+        flexDirection: 'row',
+        backgroundColor: '#FFFFFF',
+        borderRadius: 12,
+        paddingVertical: 14,
+        paddingHorizontal: 16,
+        marginBottom: 10,
+        alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06,
+        shadowRadius: 4,
+        elevation: 2,
+    },
+    assignmentRowLocked: {
+        opacity: 0.75,
+    },
+    assignmentRowIconWrap: {
+        width: 32,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 12,
+    },
+    lockIconBadge: {
+        width: 24,
+        height: 24,
+        borderRadius: 12,
+        backgroundColor: '#F3F4F6',
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    assignmentRowContent: {
+        flex: 1,
+    },
+    assignmentRowTop: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 4,
+    },
+    assignmentRowTitle: {
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#1F2937',
+        flex: 1,
+        paddingRight: 8,
+    },
+    assignmentRowGrade: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#6B7280',
+        minWidth: 54,
+        textAlign: 'right',
+    },
+    assignmentRowMetaLine: {
+        marginBottom: 2,
+    },
+    assignmentRowMeta: {
+        fontSize: 12,
+        color: '#6B7280',
+    },
+    assignmentRowNote: {
+        fontSize: 11,
+        color: '#EF4444',
+    },
+    // Lock modal styles
+    lockModalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.4)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: 24,
+    },
+    lockModalCard: {
+        width: '100%',
+        backgroundColor: '#FFFFFF',
+        borderRadius: 12,
+        padding: 18,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.15,
+        shadowRadius: 6,
+        elevation: 4,
+    },
+    lockModalTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#111827',
+        textAlign: 'center',
+        marginBottom: 8,
+    },
+    lockModalText: {
+        fontSize: 14,
+        color: '#4B5563',
+        textAlign: 'center',
+        lineHeight: 20,
+        marginBottom: 16,
+    },
+    lockModalActions: {
+        flexDirection: 'row',
+        justifyContent: 'flex-end',
+        gap: 10,
+    },
+    lockModalButton: {
+        paddingVertical: 10,
+        paddingHorizontal: 14,
+        backgroundColor: '#F3F4F6',
+        borderRadius: 8,
+    },
+    lockModalButtonText: {
+        color: '#374151',
+        fontWeight: '600',
+    },
+    lockModalPrimaryButton: {
+        paddingVertical: 10,
+        paddingHorizontal: 14,
+        backgroundColor: '#10B981',
+        borderRadius: 8,
+    },
+    lockModalPrimaryButtonText: {
+        color: '#FFFFFF',
+        fontWeight: '700',
     },
 });

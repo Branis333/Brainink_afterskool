@@ -163,7 +163,7 @@ export const UploadNoteScreen: React.FC<Props> = ({ navigation }) => {
 
     return (
         <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-            <StatusBar barStyle="light-content" backgroundColor="#7C5CFF" />
+            <StatusBar barStyle="dark-content" backgroundColor="#F5F7FA" />
 
             {/* Header */}
             <View style={styles.header}>
@@ -172,7 +172,7 @@ export const UploadNoteScreen: React.FC<Props> = ({ navigation }) => {
                     onPress={() => navigation.goBack()}
                     activeOpacity={0.7}
                 >
-                    <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+                    <Ionicons name="arrow-back" size={24} color="#1a1a1a" />
                 </TouchableOpacity>
                 <Text style={styles.headerTitle}>Upload Note</Text>
                 <View style={{ width: 40 }} />
@@ -317,11 +317,6 @@ const styles = StyleSheet.create({
         backgroundColor: '#F5F7FA',
     },
     header: {
-        backgroundColor: 'rgba(125, 92, 255, 0.4)',
-        borderTopLeftRadius: 32,
-        borderTopRightRadius: 32,
-        borderBottomLeftRadius: 32,
-        borderBottomRightRadius: 32,
         paddingHorizontal: 20,
         paddingVertical: 16,
         flexDirection: 'row',
@@ -332,14 +327,19 @@ const styles = StyleSheet.create({
         width: 40,
         height: 40,
         borderRadius: 20,
-        backgroundColor: 'rgba(255, 255, 255, 0.2)',
+        backgroundColor: '#FFFFFF',
         justifyContent: 'center',
         alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
     },
     headerTitle: {
         fontSize: 20,
         fontWeight: 'bold',
-        color: '#FFFFFF',
+        color: '#1a1a1a',
         flex: 1,
         textAlign: 'center',
     },

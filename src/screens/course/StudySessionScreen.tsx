@@ -21,6 +21,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp, useFocusEffect } from '@react-navigation/native';
 import { WebView } from 'react-native-webview';
+import YouTubeIframe from 'react-native-youtube-iframe';
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../context/AuthContext';
@@ -739,6 +740,7 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                 {videoResources.map((resource: any, index: number) => {
                     const videoId = getYouTubeVideoId(resource.url);
                     const isExpanded = expandedVideoIndex === index;
+                    const shouldPlay = isExpanded; // start playback when expanded
 
                     return (
                         <View key={index} style={styles.videoCard}>
@@ -772,12 +774,30 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                             {isExpanded && videoId && (
                                 <View style={styles.videoPlayerContainer}>
                                     <View style={styles.videoPlayerWrapper}>
-                                        <WebView
-                                            style={styles.videoPlayer}
-                                            source={{ uri: `https://www.youtube.com/embed/${videoId}` }}
-                                            allowsFullscreenVideo={true}
-                                            javaScriptEnabled={true}
-                                            domStorageEnabled={true}
+                                        <YouTubeIframe
+                                            height={220}
+                                            play={shouldPlay}
+                                            mute
+                                            initialPlayerParams={{
+                                                controls: 1,
+                                                modestbranding: true,
+                                                rel: false,
+                                                playsinline: true,
+                                            }}
+                                            videoId={videoId}
+                                            onReady={() => {
+                                                // Auto-play when ready if expanded
+                                                if (!shouldPlay) return;
+                                            }}
+                                            webViewProps={{
+                                                style: styles.videoPlayer,
+                                                allowsFullscreenVideo: true,
+                                                allowsInlineMediaPlayback: true,
+                                                mediaPlaybackRequiresUserAction: true,
+                                                startInLoadingState: true,
+                                                setSupportMultipleWindows: false,
+                                            }}
+                                            onError={() => openURL(`https://www.youtube.com/watch?v=${videoId}`, resource.title)}
                                         />
                                     </View>
                                     {resource.search_query && (
@@ -1017,6 +1037,31 @@ export const StudySessionScreen: React.FC<Props> = ({ navigation, route }) => {
                                 Content for this {block ? 'module' : 'lesson'} will be added soon
                             </Text>
                         </View>
+                    )}
+                    {/* Generate Practice Quiz button for block content */}
+                    {block?.id && (
+                        <TouchableOpacity
+                            style={{
+                                marginTop: 16,
+                                backgroundColor: '#3B82F6',
+                                paddingVertical: 12,
+                                borderRadius: 10,
+                                alignItems: 'center',
+                                flexDirection: 'row',
+                                justifyContent: 'center',
+                                gap: 8,
+                            }}
+                            onPress={() =>
+                                navigation.navigate('Quiz', {
+                                    mode: 'block',
+                                    id: block.id,
+                                    title: `Practice: ${block.title}`,
+                                })
+                            }
+                        >
+                            <Ionicons name="help-circle" size={18} color="#FFFFFF" />
+                            <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>Generate Practice Quiz</Text>
+                        </TouchableOpacity>
                     )}
                 </View>
             ),

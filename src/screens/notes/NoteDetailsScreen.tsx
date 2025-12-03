@@ -3,7 +3,7 @@
  * Shows detailed information about a specific note including AI analysis results
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     View,
     Text,
@@ -14,12 +14,14 @@ import {
     Alert,
     Dimensions,
     StatusBar,
+    Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../../context/AuthContext';
-import { notesService, StudentNote } from '../../services/notesService';
+import { notesService, StudentNote, ObjectiveItem } from '../../services/notesService';
 import { Ionicons } from '@expo/vector-icons';
 
 type NavigationProp = NativeStackNavigationProp<any>;
@@ -32,11 +34,16 @@ interface Props {
 
 const { width } = Dimensions.get('window');
 
+const OBJECTIVE_CARD_WIDTH = width * 0.75;
+const OBJECTIVE_CARD_MARGIN = 0;
+const OBJECTIVE_SNAP_INTERVAL = OBJECTIVE_CARD_WIDTH + OBJECTIVE_CARD_MARGIN;
+
 export const NoteDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
     const { token } = useAuth();
     const { noteId } = route.params;
     const [note, setNote] = useState<StudentNote | null>(null);
     const [loading, setLoading] = useState(true);
+    const objectivesScrollX = useRef(new Animated.Value(0)).current;
 
     // Load note details
     useEffect(() => {
@@ -143,39 +150,37 @@ export const NoteDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
 
     return (
         <SafeAreaView style={styles.container} edges={['top', 'left', 'right']}>
-            <StatusBar barStyle="light-content" backgroundColor="#7C5CFF" />
+            <StatusBar barStyle="dark-content" backgroundColor="#F5F7FA" />
 
-            {/* Pill-shaped Header */}
-            <View style={styles.headerContainer}>
-                <View style={styles.header}>
+            {/* Header */}
+            <View style={styles.header}>
+                <TouchableOpacity
+                    style={styles.backButton}
+                    onPress={() => navigation.goBack()}
+                    activeOpacity={0.7}
+                >
+                    <Ionicons name="arrow-back" size={24} color="#1a1a1a" />
+                </TouchableOpacity>
+                <Text style={styles.headerTitle}>Note Details</Text>
+                <View style={styles.headerActions}>
                     <TouchableOpacity
-                        style={styles.backButton}
-                        onPress={() => navigation.goBack()}
+                        style={styles.headerIconButton}
+                        onPress={handleToggleStarred}
                         activeOpacity={0.7}
                     >
-                        <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+                        <Ionicons
+                            name={note.is_starred ? 'star' : 'star-outline'}
+                            size={24}
+                            color={note.is_starred ? '#FFD700' : '#666'}
+                        />
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>Note Details</Text>
-                    <View style={styles.headerActions}>
-                        <TouchableOpacity
-                            style={styles.headerIconButton}
-                            onPress={handleToggleStarred}
-                            activeOpacity={0.7}
-                        >
-                            <Ionicons
-                                name={note.is_starred ? 'star' : 'star-outline'}
-                                size={24}
-                                color={note.is_starred ? '#FFD700' : '#FFFFFF'}
-                            />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={styles.headerIconButton}
-                            onPress={handleDelete}
-                            activeOpacity={0.7}
-                        >
-                            <Ionicons name="trash-outline" size={24} color="#FFFFFF" />
-                        </TouchableOpacity>
-                    </View>
+                    <TouchableOpacity
+                        style={styles.headerIconButton}
+                        onPress={handleDelete}
+                        activeOpacity={0.7}
+                    >
+                        <Ionicons name="trash-outline" size={24} color="#FF3B30" />
+                    </TouchableOpacity>
                 </View>
             </View>
 
@@ -207,6 +212,118 @@ export const NoteDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                 {/* AI Analysis Section */}
                 {note.ai_processed ? (
                     <>
+                        {/* Objectives - Animated Carousel with Zoom Effect */}
+                        {note.objectives && note.objectives.length > 0 && (
+                            <LinearGradient
+                                colors={['rgba(243, 240, 255, 0.9)', 'rgba(248, 246, 255, 0.7)', 'rgba(243, 240, 255, 0.9)']}
+                                start={{ x: 0, y: 0 }}
+                                end={{ x: 1, y: 0 }}
+                                style={styles.objectivesSection}
+                            >
+                                <View style={styles.sectionHeader}>
+                                    <Ionicons name="flag" size={24} color="#7C5CFF" />
+                                    <Text style={styles.sectionTitle}>Objectives</Text>
+                                    <Text style={styles.objectiveCount}>{note.objectives.length} total</Text>
+                                </View>
+                                <View style={styles.carouselContainer}>
+                                    {/* Left fade gradient */}
+                                    <LinearGradient
+                                        colors={['rgba(243, 240, 255, 1)', 'rgba(243, 240, 255, 0.6)', 'rgba(243, 240, 255, 0)']}
+                                        locations={[0, 0.5, 1]}
+                                        start={{ x: 0, y: 0 }}
+                                        end={{ x: 1, y: 0 }}
+                                        style={styles.fadeGradientLeft}
+                                        pointerEvents="none"
+                                    />
+                                    <Animated.ScrollView
+                                        horizontal
+                                        showsHorizontalScrollIndicator={false}
+                                        contentContainerStyle={styles.objectivesRow}
+                                        snapToInterval={OBJECTIVE_SNAP_INTERVAL}
+                                        decelerationRate="fast"
+                                        onScroll={Animated.event(
+                                            [{ nativeEvent: { contentOffset: { x: objectivesScrollX } } }],
+                                            { useNativeDriver: true }
+                                        )}
+                                        scrollEventThrottle={16}
+                                    >
+                                        {note.objectives.map((obj: ObjectiveItem, index: number) => {
+                                            const inputRange = [
+                                                (index - 1) * OBJECTIVE_SNAP_INTERVAL,
+                                                index * OBJECTIVE_SNAP_INTERVAL,
+                                                (index + 1) * OBJECTIVE_SNAP_INTERVAL,
+                                            ];
+                                            const scale = objectivesScrollX.interpolate({
+                                                inputRange,
+                                                outputRange: [0.92, 1.0, 0.92],
+                                                extrapolate: 'clamp',
+                                            });
+                                            const translateY = objectivesScrollX.interpolate({
+                                                inputRange,
+                                                outputRange: [8, -6, 8],
+                                                extrapolate: 'clamp',
+                                            });
+                                            const cardOpacity = objectivesScrollX.interpolate({
+                                                inputRange,
+                                                outputRange: [0.6, 1, 0.6],
+                                                extrapolate: 'clamp',
+                                            });
+
+                                            const horizontalInset = (width - OBJECTIVE_CARD_WIDTH) / 3.5 - OBJECTIVE_CARD_MARGIN / 2;
+
+                                            return (
+                                                <Animated.View
+                                                    key={index}
+                                                    style={[
+                                                        styles.objectiveCardWrapper,
+                                                        index === 0 && { marginLeft: horizontalInset },
+                                                        index === note.objectives.length - 1 && { marginRight: horizontalInset },
+                                                        {
+                                                            transform: [{ scale }, { translateY }],
+                                                            opacity: cardOpacity,
+                                                        },
+                                                    ]}
+                                                >
+                                                    <TouchableOpacity
+                                                        activeOpacity={0.9}
+                                                        style={styles.objectiveCard}
+                                                        onPress={() => navigation.navigate('ObjectiveDetails', { noteId: note.id, objectiveIndex: index + 1 })}
+                                                    >
+                                                        <View style={styles.objectiveHeader}>
+                                                            <View style={styles.objectiveNumber}>
+                                                                <Text style={styles.objectiveNumberText}>{index + 1}</Text>
+                                                            </View>
+                                                            <View style={styles.objectiveArrow}>
+                                                                <Ionicons name="arrow-forward" size={16} color="#FFF" />
+                                                            </View>
+                                                        </View>
+                                                        <Text numberOfLines={2} style={styles.objectiveTitle}>{obj.objective}</Text>
+                                                        {obj.summary ? (
+                                                            <Text numberOfLines={3} style={styles.objectiveSummary}>{obj.summary}</Text>
+                                                        ) : null}
+                                                        <View style={styles.objectiveFooter}>
+                                                            <View style={styles.objectiveAction}>
+                                                                <Ionicons name="play-circle" size={16} color="#7C5CFF" />
+                                                                <Text style={styles.objectiveActionText}>Start Learning</Text>
+                                                            </View>
+                                                        </View>
+                                                    </TouchableOpacity>
+                                                </Animated.View>
+                                            );
+                                        })}
+                                    </Animated.ScrollView>
+                                    {/* Right fade gradient */}
+                                    <LinearGradient
+                                        colors={['rgba(243, 240, 255, 0)', 'rgba(243, 240, 255, 0.6)', 'rgba(243, 240, 255, 1)']}
+                                        locations={[0, 0.5, 1]}
+                                        start={{ x: 0, y: 0 }}
+                                        end={{ x: 1, y: 0 }}
+                                        style={styles.fadeGradientRight}
+                                        pointerEvents="none"
+                                    />
+                                </View>
+                            </LinearGradient>
+                        )}
                         {/* Summary */}
                         {note.summary && (
                             <View style={styles.section}>
@@ -244,6 +361,28 @@ export const NoteDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
                                         </View>
                                     ))}
                                 </ScrollView>
+                                {/* Generate Practice Quiz (Notes-based) */}
+                                <TouchableOpacity
+                                    style={{
+                                        marginTop: 16,
+                                        backgroundColor: '#3B82F6',
+                                        paddingVertical: 14,
+                                        borderRadius: 12,
+                                        alignItems: 'center',
+                                        flexDirection: 'row',
+                                        justifyContent: 'center',
+                                        gap: 8,
+                                    }}
+                                    onPress={() =>
+                                        Alert.alert(
+                                            'Practice Quiz',
+                                            'Please open an objective to generate a focused quiz.',
+                                        )
+                                    }
+                                >
+                                    <Ionicons name="help-circle" size={20} color="#FFFFFF" />
+                                    <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>Generate Practice Quiz</Text>
+                                </TouchableOpacity>
                             </View>
                         )}
 
@@ -335,19 +474,6 @@ const styles = StyleSheet.create({
         color: '#FF3B30',
         fontWeight: '600',
     },
-    headerContainer: {
-        backgroundColor: 'rgba(125, 92, 255, 0.16)',
-        paddingBottom: 16,
-        borderTopLeftRadius: 32,
-        borderTopRightRadius: 32,
-        borderBottomLeftRadius: 32,
-        borderBottomRightRadius: 32,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.2,
-        shadowRadius: 12,
-        elevation: 8,
-    },
     header: {
         paddingHorizontal: 20,
         paddingVertical: 16,
@@ -359,26 +485,38 @@ const styles = StyleSheet.create({
         width: 40,
         height: 40,
         borderRadius: 20,
-        backgroundColor: 'rgba(255, 255, 255, 0.2)',
+        backgroundColor: '#FFFFFF',
         justifyContent: 'center',
         alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
     },
     headerTitle: {
         fontSize: 20,
         fontWeight: 'bold',
-        color: '#FFFFFF',
+        color: '#1a1a1a',
         flex: 1,
         textAlign: 'center',
     },
     headerActions: {
         flexDirection: 'row',
-        gap: 12,
+        gap: 8,
     },
     headerIconButton: {
         width: 40,
         height: 40,
+        borderRadius: 20,
+        backgroundColor: '#FFFFFF',
         justifyContent: 'center',
         alignItems: 'center',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.1,
+        shadowRadius: 4,
+        elevation: 3,
     },
     scrollView: {
         flex: 1,
@@ -440,6 +578,17 @@ const styles = StyleSheet.create({
         color: '#444',
         lineHeight: 22,
         marginTop: 8,
+    },
+    objectivesSection: {
+        borderRadius: 20,
+        padding: 20,
+        paddingBottom: 0,
+        marginBottom: 16,
+        shadowColor: '#7C5CFF',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.15,
+        shadowRadius: 12,
+        elevation: 5,
     },
     section: {
         backgroundColor: '#FFFFFF',
@@ -532,6 +681,102 @@ const styles = StyleSheet.create({
         color: '#333',
         lineHeight: 22,
         fontWeight: '500',
+    },
+    carouselContainer: {
+        position: 'relative',
+        overflow: 'hidden',
+        marginHorizontal: -20,
+        borderBottomLeftRadius: 20,
+        borderBottomRightRadius: 20,
+    },
+    fadeGradientLeft: {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        bottom: 0,
+        width: 30,
+        zIndex: 10,
+    },
+    fadeGradientRight: {
+        position: 'absolute',
+        right: 0,
+        top: 0,
+        bottom: 0,
+        width: 30,
+        zIndex: 10,
+    },
+    objectivesRow: {
+        paddingVertical: 24,
+        alignItems: 'center',
+    },
+    objectiveCardWrapper: {
+        width: OBJECTIVE_CARD_WIDTH,
+        marginRight: OBJECTIVE_CARD_MARGIN,
+        justifyContent: 'center',
+    },
+    objectiveCard: {
+        backgroundColor: '#FFFFFF',
+        borderRadius: 20,
+        padding: 20,
+        minHeight: 180,
+        shadowColor: '#7C5CFF',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.15,
+        shadowRadius: 16,
+        elevation: 8,
+        borderWidth: 1,
+        borderColor: 'rgba(124, 92, 255, 0.1)',
+    },
+    objectiveHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 14,
+    },
+    objectiveNumber: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        backgroundColor: '#7C5CFF',
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: '#7C5CFF',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 4,
+    },
+    objectiveNumberText: { fontSize: 16, fontWeight: '700', color: '#FFFFFF' },
+    objectiveArrow: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        backgroundColor: 'rgba(124, 92, 255, 0.15)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    objectiveTitle: { fontSize: 17, fontWeight: '700', color: '#1a1a1a', marginBottom: 8, lineHeight: 24 },
+    objectiveSummary: { fontSize: 14, color: '#666', lineHeight: 21, marginBottom: 12 },
+    objectiveFooter: {
+        marginTop: 'auto',
+        paddingTop: 12,
+        borderTopWidth: 1,
+        borderTopColor: 'rgba(124, 92, 255, 0.1)',
+    },
+    objectiveAction: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    objectiveActionText: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#7C5CFF',
+    },
+    objectiveCount: {
+        fontSize: 13,
+        color: '#999',
+        marginLeft: 'auto',
     },
     topicsContainer: {
         flexDirection: 'row',

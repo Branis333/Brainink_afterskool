@@ -7,9 +7,9 @@ import {
     TouchableOpacity,
     Alert,
     ActivityIndicator,
-    Dimensions,
-    Modal,
-    Image,
+
+
+
     RefreshControl
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -21,7 +21,7 @@ import { useAuth } from '../../context/AuthContext';
 import { gradesService, AISubmission, StudentAssignment as GradesStudentAssignment } from '../../services/gradesService';
 import { afterSchoolService } from '../../services/afterSchoolService';
 
-const { width } = Dimensions.get('window');
+// Removed unused Dimensions import
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type GradeDetailsRouteProp = RouteProp<RootStackParamList, 'GradeDetails'>;
@@ -29,7 +29,7 @@ type GradeDetailsRouteProp = RouteProp<RootStackParamList, 'GradeDetails'>;
 export const GradeDetailsScreen: React.FC = () => {
     const navigation = useNavigation<NavigationProp>();
     const route = useRoute<GradeDetailsRouteProp>();
-    const { submissionId, submissionType } = route.params;
+    const { submissionId } = route.params;
     const { token } = useAuth();
 
     const [loading, setLoading] = useState(true);
@@ -328,6 +328,23 @@ export const GradeDetailsScreen: React.FC = () => {
                             <Text style={styles.readMoreText}>Read Full Feedback</Text>
                             <Ionicons name="arrow-forward" size={14} color="#3B82F6" />
                         </TouchableOpacity>
+                        {/* Practice Quiz Button (Assignment-based) */}
+                        {submission.assignment_id && (
+                            <TouchableOpacity
+                                style={[styles.actionButton, { marginTop: 16, backgroundColor: '#6366F1' }]}
+                                onPress={() => {
+                                    // Fallback navigation using any-cast if Quiz not typed in RootStack yet
+                                    (navigation as any).navigate('Quiz', {
+                                        mode: 'assignment',
+                                        id: submission.assignment_id,
+                                        title: 'Assignment Quiz'
+                                    });
+                                }}
+                            >
+                                <Ionicons name="help-circle" size={20} color="#FFFFFF" />
+                                <Text style={styles.actionButtonText}>Generate Practice Quiz</Text>
+                            </TouchableOpacity>
+                        )}
                     </View>
                 )}
             </View>
@@ -498,17 +515,15 @@ export const GradeDetailsScreen: React.FC = () => {
                         </TouchableOpacity>
                     )}
 
-                    {/* Retry Assignment Button - only show for assignments */}
+                    {/* Retry Assignment Button - opens assignment details to retry from there */}
                     {submission.assignment_id && (
                         <TouchableOpacity
                             style={[styles.actionButton, styles.retryButton]}
                             onPress={() => {
-                                // Navigate to CourseAssignment screen to retry
                                 navigation.navigate('CourseAssignment', {
                                     courseId: submission.course_id,
                                     courseTitle: 'Course',
                                     assignmentId: submission.assignment_id,
-                                    startWorkflow: true
                                 });
                             }}
                         >
@@ -560,7 +575,7 @@ export const GradeDetailsScreen: React.FC = () => {
                     <Ionicons name="alert-circle" size={48} color="#EF4444" />
                     <Text style={styles.errorText}>Submission not found</Text>
                     <TouchableOpacity
-                        style={styles.retryButton}
+                        style={styles.errorBackButton}
                         onPress={() => navigation.goBack()}
                     >
                         <Text style={styles.retryButtonText}>Go Back</Text>
@@ -572,15 +587,18 @@ export const GradeDetailsScreen: React.FC = () => {
 
     return (
         <SafeAreaView style={styles.container}>
-            <View style={styles.header}>
-                <TouchableOpacity onPress={() => navigation.goBack()}>
-                    <Ionicons name="arrow-back" size={24} color="#1F2937" />
-                </TouchableOpacity>
-                <Text style={styles.headerTitle}>Grade Details</Text>
-                <TouchableOpacity onPress={() => setShowFeedbackModal(true)}>
-                    <Ionicons name="information-circle" size={24} color="#3B82F6" />
+            {/* Minimal Back + Title */}
+            <View style={styles.topActions}>
+                <TouchableOpacity
+                    onPress={() => navigation.goBack()}
+                    style={styles.backIconButton}
+                    accessibilityRole="button"
+                    accessibilityLabel="Go back"
+                >
+                    <Ionicons name="chevron-back" size={22} color="#111827" />
                 </TouchableOpacity>
             </View>
+            <Text style={styles.pageTitle}>Grades</Text>
 
             {/* Tab Navigation */}
             <View style={styles.tabNavigation}>
@@ -676,6 +694,29 @@ const styles = StyleSheet.create({
         flex: 1,
         backgroundColor: '#F9FAFB',
     },
+    topActions: {
+        paddingHorizontal: 16,
+        paddingTop: 8,
+        paddingBottom: 4,
+        backgroundColor: 'transparent',
+    },
+    backIconButton: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        backgroundColor: '#F3F4F6',
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    pageTitle: {
+        fontSize: 28,
+        fontWeight: '700',
+        color: '#111827',
+        marginTop: 8,
+        paddingHorizontal: 16,
+    },
     loadingContainer: {
         flex: 1,
         justifyContent: 'center',
@@ -698,7 +739,7 @@ const styles = StyleSheet.create({
         marginTop: 12,
         textAlign: 'center',
     },
-    retryButton: {
+    errorBackButton: {
         marginTop: 20,
         paddingHorizontal: 24,
         paddingVertical: 12,
@@ -997,6 +1038,9 @@ const styles = StyleSheet.create({
         paddingVertical: 16,
         borderRadius: 12,
         gap: 8,
+    },
+    retryButton: {
+        backgroundColor: '#FD7E14',
     },
     actionButtonSecondary: {
         backgroundColor: '#FFFFFF',

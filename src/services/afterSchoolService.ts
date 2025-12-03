@@ -257,6 +257,10 @@ export interface StudentProgress {
     // Added for block-based courses
     blocks_completed?: number;
     total_blocks?: number;
+    // New: assignment completion tracking from backend
+    passed_assignments?: number;
+    total_assignments?: number;
+    assignments_completion_percentage?: number; // may appear as assignments_pct in some responses
     average_score?: number;
     total_study_time: number;
     sessions_count: number;
@@ -401,7 +405,19 @@ export interface OneAssignmentResponse {
     assignment: CourseAssignment;
     student_status?: AssignmentStatus | null;
     is_assigned: boolean;
+    // New lock metadata from backend
+    locked?: boolean;
+    required_assignment_id?: number | null;
 }
+
+// Common lock metadata shape
+export interface AssignmentLockInfo {
+    locked?: boolean;
+    required_assignment_id?: number | null;
+}
+
+// Convenience type: student assignment enriched with lock info (when returned by some endpoints)
+export type StudentAssignmentWithLock = StudentAssignment & AssignmentLockInfo;
 
 // Course Filtering Options
 export interface CourseFilters {
@@ -1549,7 +1565,7 @@ class AfterSchoolService {
         courseId: number,
         assignmentId: number,
         token: string
-    ): Promise<StudentAssignment> {
+    ): Promise<StudentAssignmentWithLock> {
         try {
             console.log('📝 Fetching assignment details for assignment ID:', assignmentId);
 
@@ -1560,7 +1576,8 @@ class AfterSchoolService {
 
             const data = await response.json();
             console.log('✅ Assignment details fetched successfully');
-            return data;
+            // Backend may include lock metadata on this payload
+            return data as StudentAssignmentWithLock;
         } catch (error) {
             console.error('❌ Error fetching assignment details:', error);
             throw error;
@@ -1676,9 +1693,32 @@ class AfterSchoolService {
             const endpoint = `/after-school/assignments/one?${params.toString()}`;
             const response = await this.makeAuthenticatedRequest(endpoint, token);
             const data = await response.json();
+            // Includes new lock metadata (locked, required_assignment_id)
             return data as OneAssignmentResponse;
         } catch (error: any) {
             throw this.handleApiError(error, 'Get One Assignment');
+        }
+    }
+
+    /**
+     * Get single assignment with lock metadata (course-agnostic endpoint)
+     * Backend: GET /after-school/assignments/{assignment_id}
+     */
+    async getSingleAssignment(
+        assignmentId: number,
+        token: string
+    ): Promise<OneAssignmentResponse> {
+        try {
+            console.log('📝 Fetching single assignment with lock info:', assignmentId);
+            const response = await this.makeAuthenticatedRequest(
+                `/after-school/assignments/${assignmentId}`,
+                token,
+                'GET'
+            );
+            const data = await response.json();
+            return data as OneAssignmentResponse;
+        } catch (error: any) {
+            throw this.handleApiError(error, 'Get Single Assignment');
         }
     }
 
