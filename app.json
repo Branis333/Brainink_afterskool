@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Skana",
-    "slug": "skana-mobile",
+  "name": "Afterskool",
+  "slug": "afterskool",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -9,9 +9,9 @@
       "ios",
       "android"
     ],
-    "icon": "./assets/brain-logo.jpg",
+  "icon": "./assets/icon.png",
     "splash": {
-      "image": "./assets/brain-logo.jpg",
+      "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -24,7 +24,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/brain-logo.jpg",
+        "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
       "package": "com.brainink.skana",
@@ -35,10 +35,10 @@
         "WRITE_EXTERNAL_STORAGE"
       ]
     },
-    "scheme": "skana",
+  "scheme": "afterskool",
     "extra": {
       "eas": {
-        "projectId": "b0fd16c0-eba5-40ec-9111-b75531ab039b"
+        "projectId": "8d251921-dee7-4339-93b3-3dbf535f9010"
       }
     },
     "plugins": [

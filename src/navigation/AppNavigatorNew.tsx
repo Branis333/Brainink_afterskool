@@ -26,6 +26,7 @@ import { GradeHistoryScreen } from '../screens/grades/GradeHistoryScreen';
 
 // Uploads Management Screens
 import { UploadsOverviewScreen } from '../screens/uploads/UploadsOverviewScreen';
+import { useSubscription } from '../context/SubscriptionContext';
 import { FileUploadScreen } from '../screens/uploads/FileUploadScreen';
 import { BulkUploadScreen } from '../screens/uploads/BulkUploadScreen';
 import { UploadsManagementScreen } from '../screens/uploads/UploadsManagementScreen';
@@ -145,12 +146,16 @@ export type RootStackParamList = {
     EditProfile: undefined;
     // Ephemeral Practice Quiz (assignment/block/note)
     Quiz: { mode: 'assignment' | 'block' | 'note'; id: number; title?: string };
+        // Payments
+        Paywall: undefined;
 };
+import { PaywallScreen } from '../screens/payments/PaywallScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
 export const AppNavigator: React.FC = () => {
     const { user, token, school, role, isLoading } = useAuth();
+    const { status } = useSubscription();
 
     if (isLoading) {
         return null; // Or a loading screen component
@@ -189,28 +194,28 @@ export const AppNavigator: React.FC = () => {
                 />
                 <Stack.Screen
                     name="CourseDetails"
-                    component={CourseDetailsScreen}
+                    component={status?.active ? CourseDetailsScreen : PaywallScreen}
                 />
                 <Stack.Screen
                     name="LessonView"
-                    component={LessonViewScreen}
+                    component={status?.active ? LessonViewScreen : PaywallScreen}
                 />
                 <Stack.Screen
                     name="CourseProgress"
-                    component={CourseProgressScreen}
+                    component={status?.active ? CourseProgressScreen : PaywallScreen}
                 />
                 <Stack.Screen
                     name="StudySession"
-                    component={StudySessionScreen}
+                    component={status?.active ? StudySessionScreen : PaywallScreen}
                 />
                 <Stack.Screen
                     name="CourseAssignments"
-                    component={CourseAssignmentScreen}
+                    component={status?.active ? CourseAssignmentScreen : PaywallScreen}
                 />
                 {/* Alias route so navigation.navigate('CourseAssignment', ...) also works */}
                 <Stack.Screen
                     name="CourseAssignment"
-                    component={CourseAssignmentScreen}
+                    component={status?.active ? CourseAssignmentScreen : PaywallScreen}
                 />
                 <Stack.Screen
                     name="CourseSearch"
@@ -218,7 +223,7 @@ export const AppNavigator: React.FC = () => {
                 />
                 <Stack.Screen
                     name="MyCourses"
-                    component={MyCoursesScreen}
+                    component={status?.active ? MyCoursesScreen : PaywallScreen}
                 />
 
                 {/* Grades Management Screens */}
@@ -250,15 +255,15 @@ export const AppNavigator: React.FC = () => {
                 {/* Uploads Management Screens */}
                 <Stack.Screen
                     name="UploadsOverview"
-                    component={UploadsOverviewScreen}
+                    component={status?.active ? UploadsOverviewScreen : PaywallScreen}
                 />
                 <Stack.Screen
                     name="FileUpload"
-                    component={FileUploadScreen}
+                    component={status?.active ? FileUploadScreen : PaywallScreen}
                 />
                 <Stack.Screen
                     name="BulkUpload"
-                    component={BulkUploadScreen}
+                    component={status?.active ? BulkUploadScreen : PaywallScreen}
                 />
                 <Stack.Screen
                     name="UploadsManagement"
@@ -367,6 +372,16 @@ export const AppNavigator: React.FC = () => {
                     component={QuizScreen}
                     options={{
                         presentation: 'modal',
+                        animation: 'slide_from_bottom',
+                        gestureEnabled: true,
+                        gestureDirection: 'vertical',
+                    }}
+                />
+                {/* Payments */}
+                <Stack.Screen
+                    name="Paywall"
+                    component={PaywallScreen}
+                    options={{
                         animation: 'slide_from_bottom',
                         gestureEnabled: true,
                         gestureDirection: 'vertical',

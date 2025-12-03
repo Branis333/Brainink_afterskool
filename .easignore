@@ -1,0 +1,16 @@
+# Exclude native directories to force managed workflow builds
+android/
+ios/
+
+# Usual ignores to reduce upload size
+node_modules/
+.expo/
+.git/
+web-build/
+dist/
+*.log
+*.tmp
+*.temp
+# IMPORTANT: Do NOT ignore code under src/screens/uploads.
+# If you have a top-level uploads directory for artifacts, ignore it explicitly:
+/uploads/

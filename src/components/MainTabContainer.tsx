@@ -23,6 +23,7 @@ import { ProfileScreen } from '../screens/ProfileScreen';
 // import { SearchScreen } from '../screens/course/CourseSearchScreen';
 import { MyCoursesScreen } from '../screens/course/MyCourses';
 import { UploadsOverviewScreen } from '../screens/uploads/UploadsOverviewScreen';
+import { useSubscription } from '../context/SubscriptionContext';
 import { GradesOverviewScreen } from '../screens/grades/GradesOverviewScreen';
 
 // Import navigation components
@@ -43,6 +44,7 @@ export const MainTabContainer: React.FC<Props> = ({
     navigation,
     initialTab = 'home'
 }) => {
+        const { status } = useSubscription();
     const { user, token } = useAuth();
     const [activeTab, setActiveTab] = useState<TabScreens>(initialTab);
     const [uploadsBadgeCount, setUploadsBadgeCount] = useState(0);
@@ -117,8 +119,13 @@ export const MainTabContainer: React.FC<Props> = ({
                 return <CourseHomepageScreen navigation={navigation} />;
             case 'courses':
                 return <MyCoursesScreen navigation={navigation} />;
-            case 'uploads':
-                return <UploadsOverviewScreen navigation={navigation as any} route={mockRoute} />;
+                case 'uploads':
+                    if (!status?.active) {
+                        // Redirect to paywall route when no subscription
+                        navigation.navigate('Paywall');
+                        return null;
+                    }
+                    return <UploadsOverviewScreen navigation={navigation as any} route={mockRoute} />;
             case 'notes':
                 return <NotesListScreen navigation={navigation} />;
             case 'profile':
