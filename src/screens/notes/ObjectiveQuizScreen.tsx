@@ -17,43 +17,43 @@ export default function ObjectiveQuizScreen() {
     const { token } = useAuth();
 
     const { noteId, objectiveIndex, title, quizPayload } = route.params;
-    const [loading, setLoading] = useState<boolean>(!quizPayload);
+    const [loading, setLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [quiz, setQuiz] = useState<ObjectiveQuizResponse | null>(quizPayload || null);
-    const [answers, setAnswers] = useState<number[]>([]);
+    const [answers, setAnswers] = useState<number[]>(quizPayload ? new Array(quizPayload.num_questions).fill(-1) : []);
     const [submitted, setSubmitted] = useState<QuizSubmitResponse | null>(null);
     const [currentIndex, setCurrentIndex] = useState<number>(0);
 
     const headerTitle = useMemo(() => title || (quiz?.objective ? `Quiz: ${quiz.objective}` : 'Objective Quiz'), [title, quiz]);
 
     useEffect(() => {
-        let mounted = true;
-        (async () => {
-            if (quizPayload || !noteId || objectiveIndex == null) return;
-            try {
-                if (!token) throw new Error('No auth token');
-                setLoading(true);
-                const res = await notesService.generateObjectiveQuiz(noteId, objectiveIndex, token, 7);
-                if (mounted) {
-                    setQuiz(res);
-                    setAnswers(new Array(res.num_questions).fill(-1));
-                    setCurrentIndex(0);
-                }
-            } catch (e: any) {
-                if (mounted) setError(e?.message || 'Failed to load objective quiz');
-            } finally {
-                if (mounted) setLoading(false);
-            }
-        })();
-        return () => { mounted = false; };
-    }, [noteId, objectiveIndex, token]);
-
-    useEffect(() => {
         if (quizPayload) {
+            setQuiz(quizPayload);
             setAnswers(new Array(quizPayload.num_questions).fill(-1));
             setCurrentIndex(0);
         }
     }, [quizPayload]);
+
+    const generateQuiz = async (forceRegenerate: boolean = false) => {
+        if (!token) {
+            setError('No auth token');
+            return;
+        }
+        try {
+            setError(null);
+            setLoading(true);
+            const res = await notesService.generateObjectiveQuiz(noteId, objectiveIndex, token, 5, forceRegenerate);
+            setQuiz(res);
+            setAnswers(new Array(res.num_questions).fill(-1));
+            setCurrentIndex(0);
+            setSubmitted(null);
+        } catch (e: any) {
+            const message = e?.message || (typeof e === 'string' ? e : 'Failed to generate objective quiz');
+            setError(message);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const selectAnswer = (idx: number, optionIndex: number) => {
         setAnswers((prev) => {
@@ -75,7 +75,8 @@ export default function ObjectiveQuizScreen() {
             setSubmitted(res);
             Alert.alert('Quiz Submitted', `Score: ${res.correct_count}/${res.total_questions} (${Math.round(res.grade_percentage)}%)`);
         } catch (e: any) {
-            Alert.alert('Submit Failed', e?.message || 'Unable to submit quiz');
+            const message = e?.message || (typeof e === 'string' ? e : 'Unable to submit quiz');
+            Alert.alert('Submit Failed', message);
         }
     };
 
@@ -90,7 +91,7 @@ export default function ObjectiveQuizScreen() {
 
     const onClose = () => navigation.goBack();
 
-    if (loading || !quiz) {
+    if (loading) {
         return (
             <View style={styles.container}>
                 <StatusBar barStyle="light-content" backgroundColor="#3B82F6" />
@@ -99,8 +100,8 @@ export default function ObjectiveQuizScreen() {
                         <>
                             <Ionicons name="alert-circle" size={48} color="#EF4444" />
                             <Text style={styles.errorText}>{error}</Text>
-                            <TouchableOpacity style={styles.primaryButton} onPress={onClose}>
-                                <Text style={styles.primaryButtonText}>Close</Text>
+                            <TouchableOpacity style={styles.primaryButton} onPress={() => generateQuiz(true)}>
+                                <Text style={styles.primaryButtonText}>Generate MCQ Quiz</Text>
                             </TouchableOpacity>
                         </>
                     ) : (
@@ -109,6 +110,22 @@ export default function ObjectiveQuizScreen() {
                             <Text style={styles.loadingText}>Preparing quiz…</Text>
                         </>
                     )}
+                </View>
+            </View>
+        );
+    }
+
+    if (!quiz) {
+        return (
+            <View style={styles.container}>
+                <StatusBar barStyle="light-content" backgroundColor="#3B82F6" />
+                <View style={styles.center}>
+                    <Ionicons name="school" size={48} color="#3B82F6" />
+                    <Text style={styles.loadingText}>No MCQ quiz yet. Generate one to get started.</Text>
+                    <TouchableOpacity style={styles.primaryButton} onPress={() => generateQuiz(false)}>
+                        <Text style={styles.primaryButtonText}>Generate MCQ Quiz</Text>
+                    </TouchableOpacity>
+                    {error ? <Text style={styles.errorText}>{error}</Text> : null}
                 </View>
             </View>
         );
@@ -153,15 +170,15 @@ export default function ObjectiveQuizScreen() {
 
                 {/* Navigation buttons */}
                 <View style={styles.navRow}>
-                    <TouchableOpacity disabled={currentIndex === 0} onPress={goPrev} style={[styles.secondaryButton, currentIndex === 0 && styles.btnDisabled]}>
+                    <TouchableOpacity disabled={currentIndex === 0} onPress={goPrev} style={[styles.secondaryButton, styles.navButton, currentIndex === 0 && styles.btnDisabled]}>
                         <Text style={[styles.secondaryButtonText, currentIndex === 0 && styles.btnDisabledText]}>Previous</Text>
                     </TouchableOpacity>
                     {currentIndex < (quiz.questions.length - 1) ? (
-                        <TouchableOpacity onPress={goNext} style={styles.primaryButton}>
+                        <TouchableOpacity onPress={goNext} style={[styles.primaryButton, styles.navButton]}>
                             <Text style={styles.primaryButtonText}>Next</Text>
                         </TouchableOpacity>
                     ) : (
-                        <TouchableOpacity onPress={onSubmit} style={styles.primaryButton}>
+                        <TouchableOpacity onPress={onSubmit} style={[styles.primaryButton, styles.navButton]}>
                             <Text style={styles.primaryButtonText}>Submit</Text>
                         </TouchableOpacity>
                     )}
@@ -173,6 +190,10 @@ export default function ObjectiveQuizScreen() {
                         {submitted.performance_summary ? <Text style={styles.summaryNote}>{submitted.performance_summary}</Text> : null}
                     </View>
                 )}
+
+                <TouchableOpacity style={[styles.primaryButton, styles.fullWidthButton, { marginTop: 12 }]} onPress={() => generateQuiz(true)}>
+                    <Text style={styles.primaryButtonText}>Generate New MCQ Quiz</Text>
+                </TouchableOpacity>
             </View>
         </View>
     );
@@ -208,9 +229,11 @@ const styles = StyleSheet.create({
     summaryText: { fontWeight: '700', color: '#111827' },
     summaryNote: { marginTop: 6, color: '#4B5563' },
     navRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, gap: 10 },
-    primaryButton: { backgroundColor: '#3B82F6', borderRadius: 10, paddingVertical: 14, alignItems: 'center', flex: 1 },
+    primaryButton: { backgroundColor: '#3B82F6', borderRadius: 10, paddingVertical: 14, alignItems: 'center', paddingHorizontal: 12 },
     primaryButtonText: { color: '#FFFFFF', fontWeight: '600' },
-    secondaryButton: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 10, paddingVertical: 14, alignItems: 'center', flex: 1 },
+    secondaryButton: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 10, paddingVertical: 14, alignItems: 'center', paddingHorizontal: 12 },
+    navButton: { flex: 1 },
+    fullWidthButton: { alignSelf: 'stretch' },
     secondaryButtonText: { color: '#111827', fontWeight: '600' },
     btnDisabled: { opacity: 0.5 },
     btnDisabledText: { color: '#9CA3AF' },

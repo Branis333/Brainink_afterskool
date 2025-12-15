@@ -40,21 +40,22 @@ export const FlashcardsScreen: React.FC = () => {
         []
     );
 
-    useEffect(() => {
-        (async () => {
-            if (cards.length > 0) return;
-            if (!token || !noteId) return;
-            try {
-                setLoading(true);
-                const res: FlashcardsResponse = await notesService.generateObjectiveFlashcards(noteId, objectiveIndex, token, 8);
-                setCards(res.flashcards || []);
-            } catch (e: any) {
-                Alert.alert('Flashcards', e?.message || 'Failed to load flashcards');
-            } finally {
-                setLoading(false);
-            }
-        })();
-    }, [noteId, objectiveIndex, token]);
+    const generateFlashcards = async (forceRegenerate: boolean = false) => {
+        if (!token || !noteId) {
+            Alert.alert('Auth', 'Please sign in again.');
+            return;
+        }
+        try {
+            setLoading(true);
+            const res: FlashcardsResponse = await notesService.generateObjectiveFlashcards(noteId, objectiveIndex, token, 5, forceRegenerate);
+            setCards(res.flashcards || []);
+        } catch (e: any) {
+            const message = e?.message || (typeof e === 'string' ? e : 'Failed to load flashcards');
+            Alert.alert('Flashcards', message);
+        } finally {
+            setLoading(false);
+        }
+    };
 
     useEffect(() => { setIndex(0); setShowBack(false); }, [cards]);
 
@@ -101,7 +102,12 @@ export const FlashcardsScreen: React.FC = () => {
                         <ActivityIndicator size="large" color="#3B82F6" />
                     </View>
                 ) : cards.length === 0 ? (
-                    <Text style={styles.emptyText}>No flashcards to display.</Text>
+                    <View style={{ alignItems: 'center', marginTop: 16 }}>
+                        <Text style={styles.emptyText}>No flashcards to display.</Text>
+                        <TouchableOpacity style={[styles.primaryButton, styles.fullWidthButton, { marginTop: 12 }]} onPress={() => generateFlashcards(false)}>
+                            <Text style={styles.primaryButtonText}>Generate Flashcards</Text>
+                        </TouchableOpacity>
+                    </View>
                 ) : (
                     <>
                         {/* Progress dots */}
@@ -124,13 +130,17 @@ export const FlashcardsScreen: React.FC = () => {
 
                         {/* Navigation */}
                         <View style={styles.navRow}>
-                            <TouchableOpacity onPress={goPrev} disabled={index === 0} style={[styles.secondaryButton, index === 0 && styles.btnDisabled]}>
+                            <TouchableOpacity onPress={goPrev} disabled={index === 0} style={[styles.secondaryButton, styles.navButton, index === 0 && styles.btnDisabled]}>
                                 <Text style={[styles.secondaryButtonText, index === 0 && styles.btnDisabledText]}>Previous</Text>
                             </TouchableOpacity>
-                            <TouchableOpacity onPress={goNext} disabled={index >= cards.length - 1} style={[styles.primaryButton, index >= cards.length - 1 && styles.btnDisabled]}>
+                            <TouchableOpacity onPress={goNext} disabled={index >= cards.length - 1} style={[styles.primaryButton, styles.navButton, index >= cards.length - 1 && styles.btnDisabled]}>
                                 <Text style={[styles.primaryButtonText, index >= cards.length - 1 && styles.btnDisabledText]}>Next</Text>
                             </TouchableOpacity>
                         </View>
+
+                        <TouchableOpacity style={[styles.secondaryButton, styles.fullWidthButton, { marginTop: 14, justifyContent: 'center' }]} onPress={() => generateFlashcards(true)}>
+                            <Text style={styles.secondaryButtonText}>Generate New Flashcards</Text>
+                        </TouchableOpacity>
                     </>
                 )}
             </View>
@@ -186,9 +196,11 @@ const styles = StyleSheet.create({
         textAlign: 'center',
     },
     navRow: { flexDirection: 'row', gap: 10, marginTop: 12 },
-    primaryButton: { backgroundColor: '#3B82F6', borderRadius: 10, paddingVertical: 14, alignItems: 'center', flex: 1 },
+    primaryButton: { backgroundColor: '#3B82F6', borderRadius: 10, paddingVertical: 14, alignItems: 'center', paddingHorizontal: 14 },
     primaryButtonText: { color: '#FFFFFF', fontWeight: '600' },
-    secondaryButton: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 10, paddingVertical: 14, alignItems: 'center', flex: 1 },
+    secondaryButton: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 10, paddingVertical: 14, alignItems: 'center', paddingHorizontal: 14 },
+    navButton: { flex: 1 },
+    fullWidthButton: { alignSelf: 'stretch' },
     secondaryButtonText: { color: '#111827', fontWeight: '600' },
     btnDisabled: { opacity: 0.5 },
     btnDisabledText: { color: '#9CA3AF' },

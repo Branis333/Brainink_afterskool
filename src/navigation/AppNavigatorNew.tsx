@@ -1,5 +1,5 @@
-import React from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import React, { useCallback } from 'react';
+import { NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAuth } from '../context/AuthContext';
 import { LoginScreen } from '../screens/LoginScreenNew';
@@ -53,6 +53,7 @@ import { QuizScreen } from '../screens/Quiz';
 import FlashcardsScreen from '../screens/Flashcards';
 import VideoPlayerScreen from '../screens/VideoPlayer';
 import ObjectiveQuizScreen from '../screens/notes/ObjectiveQuizScreen';
+import ObjectiveWrittenQuizScreen from '../screens/notes/ObjectiveWrittenQuizScreen';
 
 export type RootStackParamList = {
     Login: undefined;
@@ -138,6 +139,7 @@ export type RootStackParamList = {
     Flashcards: { mode: 'objective'; noteId: number; objectiveIndex: number; title?: string; flashcardsPayload?: any };
     VideoPlayer: { url: string; title?: string };
     ObjectiveQuiz: { noteId: number; objectiveIndex: number; title?: string; quizPayload?: any };
+    ObjectiveWrittenQuiz: { noteId: number; objectiveIndex: number; title?: string; quizPayload?: any };
     // Notifications Management
     Notifications: undefined;
     NotificationDetail: { notification: any };
@@ -146,23 +148,41 @@ export type RootStackParamList = {
     EditProfile: undefined;
     // Ephemeral Practice Quiz (assignment/block/note)
     Quiz: { mode: 'assignment' | 'block' | 'note'; id: number; title?: string };
-        // Payments
-        Paywall: undefined;
+    // Payments
+    Paywall: undefined;
 };
 import { PaywallScreen } from '../screens/payments/PaywallScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
-export const AppNavigator: React.FC = () => {
+type AppNavigatorProps = {
+    onRouteChange?: (routeName: string) => void;
+};
+
+const navigationRef = createNavigationContainerRef();
+
+export const AppNavigator: React.FC<AppNavigatorProps> = ({ onRouteChange }) => {
     const { user, token, school, role, isLoading } = useAuth();
     const { status } = useSubscription();
+
+    const handleRouteChange = useCallback(() => {
+        if (!navigationRef.isReady()) return;
+        const current = navigationRef.getCurrentRoute();
+        if (current?.name) {
+            onRouteChange?.(current.name);
+        }
+    }, [onRouteChange]);
 
     if (isLoading) {
         return null; // Or a loading screen component
     }
 
     return (
-        <NavigationContainer>
+        <NavigationContainer
+            ref={navigationRef}
+            onReady={handleRouteChange}
+            onStateChange={handleRouteChange}
+        >
             <Stack.Navigator
                 screenOptions={{
                     headerShown: false,
@@ -325,6 +345,16 @@ export const AppNavigator: React.FC = () => {
                 <Stack.Screen
                     name="ObjectiveQuiz"
                     component={ObjectiveQuizScreen}
+                    options={{
+                        presentation: 'modal',
+                        animation: 'slide_from_bottom',
+                        gestureEnabled: true,
+                        gestureDirection: 'vertical',
+                    }}
+                />
+                <Stack.Screen
+                    name="ObjectiveWrittenQuiz"
+                    component={ObjectiveWrittenQuizScreen}
                     options={{
                         presentation: 'modal',
                         animation: 'slide_from_bottom',

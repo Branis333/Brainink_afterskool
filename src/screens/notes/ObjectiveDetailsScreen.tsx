@@ -118,12 +118,30 @@ export const ObjectiveDetailsScreen: React.FC<Props> = ({ navigation, route }) =
         });
     };
 
+    const cachedMcq = useMemo(() => (objective as any)?.quiz_mcq || null, [objective]);
+    const cachedWritten = useMemo(() => (objective as any)?.quiz_written || null, [objective]);
+    const cachedFlashcards = useMemo(() => {
+        const list = note?.objective_flashcards || [];
+        if (!Array.isArray(list) || idx0 < 0 || idx0 >= list.length) return null;
+        return list[idx0] || null;
+    }, [note, idx0]);
+
     const onGenerateQuiz = async () => {
         try {
             setBusy(true);
-            // If routes exist, navigate; else show info.
-            // navigation.navigate('ObjectiveQuizScreen', { noteId, objectiveIndex: idx0 + 1 });
-            Alert.alert('Quiz', 'Quiz generation is triggered for this objective.');
+            navigation.navigate('ObjectiveQuiz', {
+                noteId,
+                objectiveIndex: idx0 + 1, // send 1-based to keep backend happy
+                title: objective?.objective || objective?.summary || note?.title,
+                quizPayload: cachedMcq ? {
+                    note_id: noteId,
+                    objective_index: idx0,
+                    objective: objective?.objective || objective?.summary || note?.title || '',
+                    num_questions: cachedMcq.length,
+                    questions: cachedMcq as any,
+                    generated_at: new Date().toISOString(),
+                } as ObjectiveQuizResponse : undefined,
+            });
         } finally {
             setBusy(false);
         }
@@ -132,8 +150,36 @@ export const ObjectiveDetailsScreen: React.FC<Props> = ({ navigation, route }) =
     const onGenerateFlashcards = async () => {
         try {
             setBusy(true);
-            // navigation.navigate('FlashcardsScreen', { noteId, objectiveIndex: idx0 + 1 });
-            Alert.alert('Flashcards', 'Flashcards generation is triggered for this objective.');
+            navigation.navigate('Flashcards', {
+                mode: 'objective',
+                noteId,
+                objectiveIndex: idx0 + 1,
+                title: objective?.objective || objective?.summary || note?.title,
+                flashcardsPayload: cachedFlashcards ? {
+                    count: cachedFlashcards.length,
+                    flashcards: cachedFlashcards,
+                } : undefined,
+            });
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const onGenerateWrittenQuiz = async () => {
+        try {
+            setBusy(true);
+            navigation.navigate('ObjectiveWrittenQuiz', {
+                noteId,
+                objectiveIndex: idx0 + 1,
+                title: objective?.objective || objective?.summary || note?.title,
+                quizPayload: cachedWritten ? {
+                    note_id: noteId,
+                    objective_index: idx0,
+                    objective: objective?.objective || objective?.summary || note?.title || '',
+                    questions: cachedWritten as any,
+                    generated_at: new Date().toISOString(),
+                } : undefined,
+            });
         } finally {
             setBusy(false);
         }
@@ -247,11 +293,15 @@ export const ObjectiveDetailsScreen: React.FC<Props> = ({ navigation, route }) =
                     <View style={styles.actionsRow}>
                         <TouchableOpacity style={[styles.primaryBtn, busy && { opacity: 0.7 }]} disabled={busy} onPress={onGenerateQuiz}>
                             <Ionicons name="help-circle" size={20} color="#FFFFFF" />
-                            <Text style={styles.primaryBtnText}>Generate Quiz</Text>
+                            <Text style={styles.primaryBtnText}>MCQ Quiz</Text>
                         </TouchableOpacity>
                         <TouchableOpacity style={[styles.secondaryBtn, busy && { opacity: 0.7 }]} disabled={busy} onPress={onGenerateFlashcards}>
                             <Ionicons name="albums" size={20} color="#3B82F6" />
-                            <Text style={styles.secondaryBtnText}>Flash Cards</Text>
+                            <Text style={styles.secondaryBtnText}>Flashcards</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[styles.tertiaryBtn, busy && { opacity: 0.7 }]} disabled={busy} onPress={onGenerateWrittenQuiz}>
+                            <Ionicons name="create-outline" size={20} color="#1F2937" />
+                            <Text style={styles.tertiaryBtnText}>Written Quiz</Text>
                         </TouchableOpacity>
                     </View>
                 </ScrollView>
@@ -287,9 +337,11 @@ const styles = StyleSheet.create({
     videoMeta: { paddingHorizontal: 12, paddingVertical: 10 },
     videoTitle: { fontSize: 15, fontWeight: '600', color: '#fff', marginBottom: 4 },
     videoChannel: { fontSize: 12, color: '#b3b3b3' },
-    actionsRow: { flexDirection: 'row', gap: 12, marginTop: 8 },
+    actionsRow: { flexDirection: 'row', gap: 10, marginTop: 8 },
     primaryBtn: { flex: 1, backgroundColor: '#3B82F6', paddingVertical: 14, borderRadius: 12, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
     primaryBtnText: { color: '#FFFFFF', fontWeight: '700' },
     secondaryBtn: { flex: 1, backgroundColor: '#E8F0FE', paddingVertical: 14, borderRadius: 12, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8 },
     secondaryBtnText: { color: '#3B82F6', fontWeight: '700' },
+    tertiaryBtn: { flex: 1, backgroundColor: '#F3F4F6', paddingVertical: 14, borderRadius: 12, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 8, borderWidth: 1, borderColor: '#E5E7EB' },
+    tertiaryBtnText: { color: '#1F2937', fontWeight: '700' },
 });

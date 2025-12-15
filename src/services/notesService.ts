@@ -31,6 +31,8 @@ export interface ObjectiveItem {
     objective: string;
     summary?: string;
     videos?: VideoResource[];
+    quiz_mcq?: QuizQuestion[];
+    quiz_written?: WrittenQuizQuestion[];
 }
 
 export interface FlashcardItem {
@@ -41,8 +43,11 @@ export interface FlashcardItem {
 export interface ObjectiveProgressEntry {
     objective_index: number;
     latest_grade: number;
+    latest_grade_mcq?: number;
+    latest_grade_written?: number;
     performance_summary?: string;
     last_quiz_at?: string;
+    last_written_quiz_at?: string;
 }
 
 // File Upload Interfaces
@@ -202,6 +207,36 @@ export interface QuizSubmitResponse {
     submitted_at: string;
 }
 
+export interface WrittenQuizQuestion {
+    prompt: string;
+    expected_answer?: string;
+    rubric?: string;
+}
+
+export interface WrittenQuizResponse {
+    note_id: number;
+    objective_index: number;
+    objective: string;
+    questions: WrittenQuizQuestion[];
+    generated_at: string;
+}
+
+export interface WrittenQuizGradeItem {
+    prompt: string;
+    score: number;
+    max_score: number;
+    feedback?: string;
+}
+
+export interface WrittenQuizGradeResponse {
+    note_id: number;
+    objective_index: number;
+    total_score: number;
+    max_score: number;
+    percentage: number;
+    items: WrittenQuizGradeItem[];
+}
+
 export interface FlashcardsResponse {
     note_id: number;
     scope: 'objective' | 'overall';
@@ -237,6 +272,35 @@ export const NOTES_CONFIG = {
 
 class NotesService {
     private baseUrl: string;
+
+    private parseError(detail: any, fallback: string): string {
+        if (!detail) return fallback;
+        if (typeof detail === 'string') return detail;
+        if (Array.isArray(detail)) {
+            const joined = detail
+                .map((d) => (typeof d === 'string' ? d : d?.msg || d?.detail || JSON.stringify(d)))
+                .filter(Boolean)
+                .join('; ');
+            return joined || fallback;
+        }
+        if (typeof detail === 'object') {
+            const msg = (detail as any).detail || (detail as any).message;
+            if (typeof msg === 'string') return msg;
+            if (Array.isArray(msg)) {
+                const joined = msg
+                    .map((d: any) => (typeof d === 'string' ? d : d?.msg || d?.detail || JSON.stringify(d)))
+                    .filter(Boolean)
+                    .join('; ');
+                if (joined) return joined;
+            }
+            try {
+                return JSON.stringify(detail);
+            } catch {
+                return fallback;
+            }
+        }
+        return String(detail) || fallback;
+    }
 
     constructor() {
         this.baseUrl = getBackendUrl();
@@ -422,11 +486,13 @@ class NotesService {
         noteId: number,
         objectiveIndex: number,
         token: string,
-        numQuestions: number = 7
+        numQuestions: number = 5,
+        regenerate: boolean = false,
     ): Promise<ObjectiveQuizResponse> {
         const form = new FormData();
         form.append('objective_index', String(objectiveIndex));
         form.append('num_questions', String(numQuestions));
+        form.append('regenerate', regenerate ? 'true' : 'false');
 
         const res = await fetch(`${this.baseUrl}/after-school/notes/${noteId}/quiz`, {
             method: 'POST',
@@ -435,7 +501,34 @@ class NotesService {
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || 'Failed to generate objective quiz');
+            throw new Error(this.parseError(err?.detail ?? err, 'Failed to generate objective quiz'));
+        }
+        return res.json();
+    }
+
+    /**
+     * Generate written (short-answer) quiz for an objective (no persistence)
+     * Endpoint: POST /after-school/notes/{note_id}/objectives/{objective_index}/quiz/written
+     */
+    async generateObjectiveWrittenQuiz(
+        noteId: number,
+        objectiveIndex: number,
+        token: string,
+        numQuestions: number = 1,
+        regenerate: boolean = false,
+    ): Promise<WrittenQuizResponse> {
+        const form = new FormData();
+        form.append('num_questions', String(numQuestions));
+        form.append('regenerate', regenerate ? 'true' : 'false');
+
+        const res = await fetch(`${this.baseUrl}/after-school/notes/${noteId}/objectives/${objectiveIndex}/quiz/written`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: form,
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to generate written quiz');
         }
         return res.json();
     }
@@ -460,6 +553,43 @@ class NotesService {
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
             throw new Error(err.detail || 'Failed to submit quiz');
+        }
+        return res.json();
+    }
+
+    /**
+     * Grade written quiz answers from images (no persistence)
+     * Endpoint: POST /after-school/notes/{note_id}/objectives/{objective_index}/quiz/written/grade
+     */
+    async gradeObjectiveWrittenQuiz(
+        noteId: number,
+        objectiveIndex: number,
+        questions: WrittenQuizQuestion[],
+        files: UploadFile[],
+        token: string
+    ): Promise<WrittenQuizGradeResponse> {
+        if (!questions || questions.length === 0) {
+            throw new Error('Questions payload is required');
+        }
+        if (!files || files.length === 0) {
+            throw new Error('At least one answer image is required');
+        }
+
+        const form = new FormData();
+        form.append('questions', JSON.stringify(questions));
+        for (const f of files) {
+            const upload = { uri: f.uri, type: f.type, name: f.name } as any;
+            form.append('files', upload);
+        }
+
+        const res = await fetch(`${this.baseUrl}/after-school/notes/${noteId}/objectives/${objectiveIndex}/quiz/written/grade`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: form,
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to grade written quiz');
         }
         return res.json();
     }
@@ -502,11 +632,13 @@ class NotesService {
         noteId: number,
         objectiveIndex: number,
         token: string,
-        count: number = 8
+        count: number = 5,
+        regenerate: boolean = false,
     ): Promise<FlashcardsResponse> {
         const form = new FormData();
         form.append('objective_index', String(objectiveIndex));
         form.append('count', String(count));
+        form.append('regenerate', regenerate ? 'true' : 'false');
 
         const res = await fetch(`${this.baseUrl}/after-school/notes/${noteId}/flashcards`, {
             method: 'POST',
@@ -515,7 +647,7 @@ class NotesService {
         });
         if (!res.ok) {
             const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || 'Failed to generate objective flashcards');
+            throw new Error(this.parseError(err?.detail ?? err, 'Failed to generate objective flashcards'));
         }
         return res.json();
     }
