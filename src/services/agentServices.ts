@@ -28,6 +28,14 @@ export interface KanaChatResponse {
     history: KanaMessage[];
 }
 
+export interface TranscriptionResponse {
+    success: boolean;
+    transcript: string;
+    model?: string;
+    filename?: string;
+    mime_type?: string;
+}
+
 const getBackendUrl = () => {
     return 'https://brainink-backend.onrender.com';
 };
@@ -60,6 +68,40 @@ class AgentService {
         }
 
         const data = (await res.json()) as KanaChatResponse;
+        return data;
+    }
+
+    async transcribeAudio(audioUri: string, token?: string, instructions?: string): Promise<TranscriptionResponse> {
+        const url = `${this.baseUrl}/after-school/transcribe/audio`;
+        const form = new FormData();
+
+        form.append('audio', {
+            uri: audioUri,
+            name: 'recording.m4a',
+            type: 'audio/mp4',
+        } as any);
+
+        if (instructions) {
+            form.append('instructions', instructions);
+        }
+
+        const headers: Record<string, string> = {};
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const res = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: form,
+        });
+
+        if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || 'Transcription service error');
+        }
+
+        const data = (await res.json()) as TranscriptionResponse;
         return data;
     }
 }

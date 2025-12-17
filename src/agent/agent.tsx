@@ -16,6 +16,7 @@ import {
     useWindowDimensions,
     Vibration,
 } from 'react-native';
+import { Audio, AVPlaybackStatus } from 'expo-av';
 import { BlurView } from 'expo-blur';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -27,6 +28,7 @@ type KanaContextValue = {
     isOpen: boolean;
     toggle: () => void;
     send: (text: string) => Promise<void>;
+    transcribeAndSend: (audioUri: string) => Promise<void>;
     setRouteInfo: (route: string, screenContext?: string) => void;
     messages: KanaMessage[];
     isSending: boolean;
@@ -235,10 +237,31 @@ export const KanaProvider: React.FC<{ children: React.ReactNode }> = ({ children
         [captureVisualContext, isSending, messages, route, screenContext, sessionId, token]
     );
 
+    const transcribeAndSend = useCallback(
+        async (audioUri: string) => {
+            try {
+                const transcriptRes = await agentService.transcribeAudio(audioUri, token ?? undefined);
+                if (!transcriptRes?.transcript) {
+                    throw new Error('No transcript returned');
+                }
+                await send(transcriptRes.transcript);
+            } catch (err: any) {
+                const failure: KanaMessage = {
+                    role: 'assistant',
+                    content: err?.message || 'Transcription failed. Try again.',
+                    timestamp: new Date().toISOString(),
+                };
+                setMessages((prev) => [...prev, failure]);
+            }
+        },
+        [send, token]
+    );
+
     const ctxValue: KanaContextValue = {
         isOpen,
         toggle,
         send,
+        transcribeAndSend,
         setRouteInfo,
         messages,
         isSending,
@@ -313,7 +336,7 @@ export const KanaProvider: React.FC<{ children: React.ReactNode }> = ({ children
                                 <View style={styles.cardContent}>
                                     <KanaHeader onClose={toggle} onNewChat={startNewChat} route={route} />
                                     <KanaMessages messages={messages} />
-                                    <KanaInput onSend={send} isSending={isSending} />
+                                    <KanaInput onSend={send} onTranscribe={transcribeAndSend} isSending={isSending} />
                                 </View>
                             </BlurView>
                         </KeyboardAvoidingView>
@@ -390,8 +413,12 @@ const KanaMessages: React.FC<{ messages: KanaMessage[] }> = ({ messages }) => {
     );
 };
 
-const KanaInput: React.FC<{ onSend: (text: string) => void; isSending: boolean }> = ({ onSend, isSending }) => {
+const KanaInput: React.FC<{ onSend: (text: string) => void; onTranscribe: (uri: string) => Promise<void>; isSending: boolean }> = ({ onSend, onTranscribe, isSending }) => {
     const [text, setText] = useState('');
+    const [recording, setRecording] = useState<Audio.Recording | null>(null);
+    const [isRecording, setIsRecording] = useState(false);
+    const [isTranscribing, setIsTranscribing] = useState(false);
+    const [error, setError] = useState<string | null>(null);
 
     const handleSend = useCallback(() => {
         if (!text.trim()) return;
@@ -399,8 +426,74 @@ const KanaInput: React.FC<{ onSend: (text: string) => void; isSending: boolean }
         setText('');
     }, [onSend, text]);
 
+    const startRecording = useCallback(async () => {
+        try {
+            setError(null);
+            const permission = await Audio.requestPermissionsAsync();
+            if (!permission.granted) {
+                setError('Microphone permission is required');
+                return;
+            }
+
+            await Audio.setAudioModeAsync({
+                allowsRecordingIOS: true,
+                playsInSilentModeIOS: true,
+                staysActiveInBackground: false,
+            });
+
+            const rec = new Audio.Recording();
+            await rec.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+            await rec.startAsync();
+            setRecording(rec);
+            setIsRecording(true);
+        } catch (err: any) {
+            setError(err?.message || 'Could not start recording');
+        }
+    }, []);
+
+    const stopRecording = useCallback(async () => {
+        if (!recording) return;
+        try {
+            await recording.stopAndUnloadAsync();
+            const uri = recording.getURI();
+            setIsRecording(false);
+            setRecording(null);
+
+            if (!uri) {
+                setError('No audio captured');
+                return;
+            }
+
+            setIsTranscribing(true);
+            await onTranscribe(uri);
+        } catch (err: any) {
+            setError(err?.message || 'Could not stop recording');
+        } finally {
+            setIsTranscribing(false);
+        }
+    }, [onTranscribe, recording]);
+
+    const handleRecordPress = useCallback(() => {
+        if (isRecording) {
+            stopRecording();
+        } else {
+            startRecording();
+        }
+    }, [isRecording, startRecording, stopRecording]);
+
     return (
         <View style={styles.inputRow}>
+            <Pressable
+                onPress={handleRecordPress}
+                disabled={isSending || isTranscribing}
+                style={[styles.recordButton, isRecording ? styles.recordButtonActive : null]}
+            >
+                {isTranscribing ? (
+                    <ActivityIndicator color="#0c0f14" />
+                ) : (
+                    <Text style={styles.recordLabel}>{isRecording ? 'Stop' : 'Rec'}</Text>
+                )}
+            </Pressable>
             <TextInput
                 style={styles.input}
                 placeholder="Ask Kana anything here"
@@ -413,6 +506,7 @@ const KanaInput: React.FC<{ onSend: (text: string) => void; isSending: boolean }
             <Pressable onPress={handleSend} disabled={isSending || !text.trim()} style={styles.sendButton}>
                 {isSending ? <ActivityIndicator color="#0f172a" /> : <Text style={styles.sendLabel}>Send</Text>}
             </Pressable>
+            {error ? <Text style={styles.errorText}>{error}</Text> : null}
         </View>
     );
 };
@@ -593,10 +687,37 @@ const styles = StyleSheet.create({
         shadowRadius: 8,
         shadowOffset: { width: 0, height: 4 },
     },
+    recordButton: {
+        backgroundColor: '#e2e8f0',
+        borderRadius: 16,
+        paddingHorizontal: 12,
+        paddingVertical: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+        minWidth: 60,
+        borderWidth: 1,
+        borderColor: '#cbd5e1',
+    },
+    recordButtonActive: {
+        backgroundColor: '#f87171',
+        borderColor: '#ef4444',
+    },
     sendLabel: {
         color: '#ffffff',
         fontWeight: '800',
         letterSpacing: 0.2,
+    },
+    recordLabel: {
+        color: '#0f172a',
+        fontWeight: '800',
+        letterSpacing: 0.2,
+    },
+    errorText: {
+        position: 'absolute',
+        bottom: -20,
+        left: 0,
+        color: '#ef4444',
+        fontSize: 11,
     },
 });
 
