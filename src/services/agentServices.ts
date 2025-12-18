@@ -36,6 +36,14 @@ export interface TranscriptionResponse {
     mime_type?: string;
 }
 
+export interface KanaTTSResponse {
+    audio_base64: string;
+    mime_type: string;
+    sample_rate: number;
+    voice: string;
+    duration_seconds?: number;
+}
+
 const getBackendUrl = () => {
     return 'https://brainink-backend.onrender.com';
 };
@@ -102,6 +110,34 @@ class AgentService {
         }
 
         const data = (await res.json()) as TranscriptionResponse;
+        return data;
+    }
+
+    async synthesizeSpeech(text: string, token?: string, voice?: string, speed?: number): Promise<KanaTTSResponse> {
+        const url = `${this.baseUrl}/after-school/kana/tts`;
+        const headers: Record<string, string> = {
+            'Content-Type': 'application/json',
+        };
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const payload: Record<string, unknown> = { text };
+        if (voice) payload.voice = voice;
+        if (typeof speed === 'number') payload.speed = speed;
+
+        const res = await fetch(url, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload),
+        });
+
+        if (!res.ok) {
+            const textResp = await res.text();
+            throw new Error(textResp || 'Kana TTS error');
+        }
+
+        const data = (await res.json()) as KanaTTSResponse;
         return data;
     }
 }

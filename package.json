@@ -55,6 +55,7 @@
     "pretty-format": "27.5.1",
     "react-dom": "19.1.0",
     "react-is": "17.0.2",
+    "react-refresh": "^0.18.0",
     "ts-jest": "^29.4.5",
     "typescript": "~5.9.2"
   },

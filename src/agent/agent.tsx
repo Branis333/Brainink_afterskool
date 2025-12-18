@@ -18,6 +18,8 @@ import {
 } from 'react-native';
 import { Audio, AVPlaybackStatus } from 'expo-av';
 import { BlurView } from 'expo-blur';
+import * as FileSystem from 'expo-file-system';
+import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { captureScreen } from 'react-native-view-shot';
@@ -383,34 +385,216 @@ const KanaHeader: React.FC<{ onClose: () => void; onNewChat: () => void; route: 
 
 const KanaMessages: React.FC<{ messages: KanaMessage[] }> = ({ messages }) => {
     const listRef = useRef<FlatList<KanaMessage>>(null);
+    const { token } = useAuth();
+    const listData = useMemo(() => [...messages].reverse(), [messages]);
 
     return (
         <FlatList
             ref={listRef}
-            data={[...messages].reverse()} // reverse so inverted list keeps newest at bottom
+            data={listData}
             inverted
-            keyExtractor={(_, idx) => `kana-msg-${idx}`}
+            keyExtractor={(item, idx) => buildMessageKey(item, idx)}
             style={styles.messageListContainer}
             contentContainerStyle={styles.messageList}
             showsVerticalScrollIndicator={false}
-            renderItem={({ item }) => (
-                <View
-                    style={[
-                        styles.bubble,
-                        item.role === 'assistant' ? styles.bubbleAssistant : styles.bubbleUser,
-                    ]}
-                >
-                    <Text style={
-                        item.role === 'assistant'
-                            ? styles.bubbleTextAssistant
-                            : styles.bubbleTextUser
-                    }>
-                        {item.content}
-                    </Text>
-                </View>
+            renderItem={({ item, index }) => (
+                item.role === 'assistant' ? (
+                    <KanaAssistantBubble message={item} index={index} token={token ?? undefined} />
+                ) : (
+                    <View style={[styles.bubble, styles.bubbleUser]}>
+                        <Text style={styles.bubbleTextUser}>{item.content}</Text>
+                    </View>
+                )
             )}
         />
     );
+};
+
+const KanaAssistantBubble: React.FC<{ message: KanaMessage; index: number; token?: string }> = ({ message, index, token }) => {
+    const [ttsState, setTtsState] = useState<'idle' | 'loading' | 'ready' | 'playing' | 'paused' | 'error'>('idle');
+    const [error, setError] = useState<string | null>(null);
+    const soundRef = useRef<Audio.Sound | null>(null);
+    const audioUriRef = useRef<string | null>(null);
+    const messageKey = useMemo(() => buildMessageKey(message, index), [message, index]);
+
+    useEffect(() => {
+        return () => {
+            if (soundRef.current) {
+                soundRef.current.unloadAsync().catch(() => null);
+            }
+            if (
+                audioUriRef.current &&
+                Platform.OS === 'web' &&
+                typeof URL !== 'undefined' &&
+                audioUriRef.current.startsWith('blob:')
+            ) {
+                URL.revokeObjectURL(audioUriRef.current);
+            }
+        };
+    }, []);
+
+    const ensureAudioFile = useCallback(async () => {
+        if (audioUriRef.current) {
+            return audioUriRef.current;
+        }
+        setError(null);
+        setTtsState('loading');
+        try {
+            const result = await agentService.synthesizeSpeech(message.content, token);
+            if (!result?.audio_base64) {
+                throw new Error('Kana TTS returned an empty payload');
+            }
+
+            if (Platform.OS === 'web') {
+                const decode = typeof atob === 'function' ? atob : null;
+                if (!decode || typeof URL === 'undefined') {
+                    throw new Error('Web runtime does not support in-browser audio playback');
+                }
+
+                const binary = decode(result.audio_base64);
+                const byteNumbers = new Array(binary.length);
+                for (let i = 0; i < binary.length; i += 1) {
+                    byteNumbers[i] = binary.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                const blob = new Blob([byteArray], { type: result.mime_type || 'audio/wav' });
+                if (audioUriRef.current && audioUriRef.current.startsWith('blob:')) {
+                    URL.revokeObjectURL(audioUriRef.current);
+                }
+                const objectUrl = URL.createObjectURL(blob);
+                audioUriRef.current = objectUrl;
+                setTtsState('ready');
+                return objectUrl;
+            }
+
+            const baseDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+            if (!baseDir) {
+                throw new Error('Kana cannot access device storage for audio playback');
+            }
+            const fileUri = `${baseDir}kana-tts-${messageKey}.wav`;
+            const base64Encoding = (FileSystem as any)?.EncodingType?.Base64 || ('base64' as FileSystem.EncodingType);
+            await FileSystem.writeAsStringAsync(fileUri, result.audio_base64, {
+                encoding: base64Encoding,
+            });
+            audioUriRef.current = fileUri;
+            setTtsState('ready');
+            return fileUri;
+        } catch (err: any) {
+            const msg = err?.message || 'Unable to generate audio right now';
+            setError(msg);
+            setTtsState('error');
+            throw err;
+        }
+    }, [message.content, messageKey, token]);
+
+    const ensureSound = useCallback(async () => {
+        await ensureAudioFile();
+        if (soundRef.current) {
+            return soundRef.current;
+        }
+
+        await Audio.setAudioModeAsync({
+            allowsRecordingIOS: false,
+            playsInSilentModeIOS: true,
+            staysActiveInBackground: false,
+        });
+
+        const { sound } = await Audio.Sound.createAsync(
+            { uri: audioUriRef.current as string },
+            { shouldPlay: false }
+        );
+
+        sound.setOnPlaybackStatusUpdate((status: AVPlaybackStatus) => {
+            if (!status.isLoaded) {
+                return;
+            }
+            if (status.didJustFinish) {
+                setTtsState('ready');
+                soundRef.current?.setPositionAsync(0).catch(() => null);
+            } else if (status.isPlaying) {
+                setTtsState('playing');
+            } else if (!status.isPlaying && status.positionMillis > 0) {
+                setTtsState('paused');
+            }
+        });
+
+        soundRef.current = sound;
+        return sound;
+    }, [ensureAudioFile]);
+
+    const handlePlay = useCallback(async () => {
+        try {
+            const sound = await ensureSound();
+            if (!sound) return;
+
+            const status = await sound.getStatusAsync();
+            if (status.isLoaded && status.didJustFinish) {
+                await sound.setPositionAsync(0);
+            }
+            await sound.playAsync();
+            setTtsState('playing');
+        } catch (err: any) {
+            setError(err?.message || 'Could not start playback');
+            setTtsState('error');
+        }
+    }, [ensureSound]);
+
+    const handlePause = useCallback(async () => {
+        if (!soundRef.current) return;
+        const status = await soundRef.current.getStatusAsync();
+        if (status.isLoaded && status.isPlaying) {
+            await soundRef.current.pauseAsync();
+            setTtsState('paused');
+        }
+    }, []);
+
+    const isPlaying = ttsState === 'playing';
+    const isLoading = ttsState === 'loading';
+
+    return (
+        <View style={[styles.bubble, styles.bubbleAssistant]}>
+            <Text style={styles.bubbleTextAssistant}>{message.content}</Text>
+            <View style={styles.ttsControls}>
+                <Pressable
+                    onPress={handlePlay}
+                    disabled={isLoading}
+                    style={[
+                        styles.ttsButton,
+                        isPlaying ? styles.ttsButtonActive : null,
+                        isLoading ? styles.ttsButtonLoading : null,
+                    ]}
+                >
+                    {isLoading ? (
+                        <ActivityIndicator size="small" color={isPlaying ? '#ffffff' : '#0f172a'} />
+                    ) : (
+                        <Ionicons name="volume-high" size={16} color={isPlaying ? '#ffffff' : '#0f172a'} />
+                    )}
+                    <Text style={[styles.ttsButtonText, isPlaying ? styles.ttsButtonTextActive : null]}>
+                        {isPlaying ? 'Playing' : 'Listen'}
+                    </Text>
+                </Pressable>
+                <Pressable
+                    onPress={handlePause}
+                    disabled={!isPlaying}
+                    style={[
+                        styles.ttsButton,
+                        styles.ttsSecondaryButton,
+                        !isPlaying ? styles.ttsButtonDisabled : null,
+                    ]}
+                >
+                    <Ionicons name="pause" size={16} color={isPlaying ? '#0f172a' : '#94a3b8'} />
+                    <Text style={[styles.ttsButtonText, !isPlaying ? styles.ttsButtonDisabledText : null]}>Pause</Text>
+                </Pressable>
+            </View>
+            {error ? <Text style={styles.ttsError}>{error}</Text> : null}
+        </View>
+    );
+};
+
+const buildMessageKey = (message: KanaMessage, fallbackIndex = 0) => {
+    const ts = message.timestamp || `${message.role}-${fallbackIndex}`;
+    const snippet = (message.content || '').slice(0, 16) || 'kana';
+    return `${ts}-${snippet}`.replace(/[^a-z0-9]/gi, '-').toLowerCase();
 };
 
 const KanaInput: React.FC<{ onSend: (text: string) => void; onTranscribe: (uri: string) => Promise<void>; isSending: boolean }> = ({ onSend, onTranscribe, isSending }) => {
@@ -716,6 +900,53 @@ const styles = StyleSheet.create({
         position: 'absolute',
         bottom: -20,
         left: 0,
+        color: '#ef4444',
+        fontSize: 11,
+    },
+    ttsControls: {
+        flexDirection: 'row',
+        gap: 8,
+        marginTop: 10,
+        flexWrap: 'wrap',
+    },
+    ttsButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 14,
+        paddingVertical: 6,
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: '#cbd5e1',
+        backgroundColor: '#e2e8f0',
+        gap: 6,
+    },
+    ttsButtonActive: {
+        backgroundColor: '#0f172a',
+        borderColor: '#0f172a',
+    },
+    ttsButtonLoading: {
+        opacity: 0.8,
+    },
+    ttsSecondaryButton: {
+        backgroundColor: 'rgba(148, 163, 184, 0.18)',
+        borderColor: '#cbd5e1',
+    },
+    ttsButtonDisabled: {
+        opacity: 0.4,
+    },
+    ttsButtonText: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: '#0f172a',
+    },
+    ttsButtonTextActive: {
+        color: '#ffffff',
+    },
+    ttsButtonDisabledText: {
+        color: '#94a3b8',
+    },
+    ttsError: {
+        marginTop: 6,
         color: '#ef4444',
         fontSize: 11,
     },
