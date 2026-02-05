@@ -15,7 +15,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../context/AuthContext';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useRoute } from '@react-navigation/native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type LoginScreenProps = {
     navigation: NativeStackNavigationProp<any, 'Login'>;
@@ -52,10 +51,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, route }) =
     // Function to handle successful authentication
     const handleSuccessfulAuth = async (data: any) => {
         try {
-            // Store tokens using AsyncStorage (React Native equivalent of localStorage)
-            await AsyncStorage.setItem('access_token', data.access_token);
-            await AsyncStorage.setItem('encrypted_user_data', data.encrypted_data);
-
             console.log('Authentication successful:', data);
 
             // Create user data object for context
@@ -80,10 +75,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, route }) =
                 };
             }
 
-            // Persist a plain user profile for quick boot-time hydration
-            await AsyncStorage.setItem('user_profile', JSON.stringify(userData));
-
-            await login(data.access_token, userData);
+            // Centralize persistence in AuthContext (access_token + refresh_token + encrypted_data + profile)
+            await login(data.access_token, userData, {
+                refresh_token: data.refresh_token,
+                encrypted_data: data.encrypted_data,
+            });
             navigation.navigate('CourseHomepage');
         } catch (error) {
             console.error('Error in handleSuccessfulAuth:', error);
@@ -123,10 +119,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, route }) =
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json',
                 },
                 body: JSON.stringify({
                     username: form.username,
                     password: form.password,
+                    client_type: 'app',
                 }),
             });
 
@@ -181,6 +179,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, route }) =
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
+                    'Accept': 'application/json',
                 },
                 body: JSON.stringify({
                     fname: form.fname,
@@ -188,6 +187,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, route }) =
                     username: form.username,
                     email: form.email,
                     password: form.password,
+                    client_type: 'app',
                 }),
             });
 

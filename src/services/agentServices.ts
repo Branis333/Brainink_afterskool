@@ -44,6 +44,29 @@ export interface KanaTTSResponse {
     duration_seconds?: number;
 }
 
+const guessAudioMimeFromUri = (uri: string): { name: string; type: string } => {
+    const match = uri.match(/\.([a-z0-9]+)(?:\?|#|$)/i);
+    const ext = (match?.[1] || 'm4a').toLowerCase();
+    const name = `recording.${ext}`;
+
+    const typeByExt: Record<string, string> = {
+        m4a: 'audio/mp4',
+        mp4: 'audio/mp4',
+        mp3: 'audio/mpeg',
+        wav: 'audio/wav',
+        webm: 'audio/webm',
+        aac: 'audio/aac',
+        caf: 'audio/x-caf',
+        '3gp': 'audio/3gpp',
+        ogg: 'audio/ogg',
+    };
+
+    return {
+        name,
+        type: typeByExt[ext] || 'audio/*',
+    };
+};
+
 const getBackendUrl = () => {
     return 'https://brainink-backend.onrender.com';
 };
@@ -83,10 +106,12 @@ class AgentService {
         const url = `${this.baseUrl}/after-school/transcribe/audio`;
         const form = new FormData();
 
+        const meta = guessAudioMimeFromUri(audioUri);
+
         form.append('audio', {
             uri: audioUri,
-            name: 'recording.m4a',
-            type: 'audio/mp4',
+            name: meta.name,
+            type: meta.type,
         } as any);
 
         if (instructions) {

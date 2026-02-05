@@ -10,10 +10,17 @@
  * multiple-choice quiz payload for immediate practice.
  */
 
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
 // Get the correct backend URL based on environment (mirror pattern in afterSchoolService)
 const getBackendUrl = () => {
     return 'https://brainink-backend.onrender.com';
 };
+
+const STORAGE_KEYS = {
+    accessToken: 'access_token',
+    refreshToken: 'refresh_token',
+} as const;
 
 // ===============================
 // TYPES
@@ -104,7 +111,11 @@ export class QuizService {
 
     private async requestQuiz(url: string, options: RequestOptions): Promise<PracticeQuiz> {
         const { token, signal, timeoutMs } = options || {};
-        const auth = token ?? this.authToken;
+        const auth = token ?? this.authToken ?? (await AsyncStorage.getItem(STORAGE_KEYS.accessToken));
+
+        if (!auth) {
+            throw new Error('Not authenticated (missing access token).');
+        }
 
         // Optional timeout via AbortController chaining
         const controller = timeoutMs ? new AbortController() : undefined;
@@ -117,10 +128,36 @@ export class QuizService {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    ...(auth ? { Authorization: `Bearer ${auth}` } : {}),
+                    Authorization: `Bearer ${auth}`,
                 },
                 signal: controller?.signal ?? signal,
             });
+
+            // If access token expired, refresh using refresh_token (mobile flow) and retry once.
+            if (res.status === 401) {
+                const newToken = await this.tryRefreshAccessToken();
+                if (newToken) {
+                    const retryRes = await fetch(url, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            Authorization: `Bearer ${newToken}`,
+                        },
+                        signal: controller?.signal ?? signal,
+                    });
+
+                    if (!retryRes.ok) {
+                        const text = await safeReadText(retryRes);
+                        throw httpError(
+                            retryRes.status,
+                            `Quiz request failed (${retryRes.status}): ${text || retryRes.statusText}`
+                        );
+                    }
+
+                    const payload = (await retryRes.json()) as PracticeQuiz;
+                    return normalizeQuiz(payload);
+                }
+            }
 
             if (!res.ok) {
                 const text = await safeReadText(res);
@@ -137,6 +174,43 @@ export class QuizService {
             throw err;
         } finally {
             if (timer) clearTimeout(timer);
+        }
+    }
+
+    private async tryRefreshAccessToken(): Promise<string | null> {
+        try {
+            const refreshToken = await AsyncStorage.getItem(STORAGE_KEYS.refreshToken);
+            if (!refreshToken) return null;
+
+            const res = await fetch(`${this.baseUrl}/refresh`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json',
+                },
+                body: JSON.stringify({
+                    client_type: 'app',
+                    refresh_token: refreshToken,
+                }),
+            });
+
+            if (!res.ok) return null;
+
+            const data = await res.json().catch(() => null);
+            const access = data?.access_token as string | undefined;
+            const rotatedRefresh = data?.refresh_token as string | undefined;
+
+            if (access) {
+                await AsyncStorage.setItem(STORAGE_KEYS.accessToken, access);
+                this.authToken = access;
+            }
+            if (rotatedRefresh) {
+                await AsyncStorage.setItem(STORAGE_KEYS.refreshToken, rotatedRefresh);
+            }
+
+            return access ?? null;
+        } catch {
+            return null;
         }
     }
 }
