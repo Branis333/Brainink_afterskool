@@ -189,7 +189,7 @@ export class QuizService {
                     'Accept': 'application/json',
                 },
                 body: JSON.stringify({
-                    client_type: 'app',
+                    client_type: 'mobile',
                     refresh_token: refreshToken,
                 }),
             });

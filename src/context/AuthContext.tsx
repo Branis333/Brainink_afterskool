@@ -123,7 +123,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                     'Accept': 'application/json',
                 },
                 body: JSON.stringify({
-                    client_type: 'app',
+                    client_type: 'mobile',
                     ...(storedRefresh ? { refresh_token: storedRefresh } : {}),
                 }),
             });

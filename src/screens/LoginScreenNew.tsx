@@ -44,6 +44,25 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, route }) =
     const [error, setError] = useState('');
     const { login } = useAuth();
 
+    const getErrorMessage = (payload: any, fallback: string) => {
+        const detail = payload?.detail;
+        if (typeof detail === 'string' && detail.trim()) return detail;
+        if (Array.isArray(detail) && detail.length > 0) {
+            const first = detail[0];
+            if (typeof first === 'string' && first.trim()) return first;
+            if (first && typeof first === 'object') {
+                if (typeof first.msg === 'string' && first.msg.trim()) return first.msg;
+                if (typeof first.message === 'string' && first.message.trim()) return first.message;
+            }
+        }
+
+        if (typeof payload?.message === 'string' && payload.message.trim()) {
+            return payload.message;
+        }
+
+        return fallback;
+    };
+
     const handleInputChange = (field: string, value: string) => {
         setForm(prev => ({ ...prev, [field]: value }));
     };
@@ -124,7 +143,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, route }) =
                 body: JSON.stringify({
                     username: form.username,
                     password: form.password,
-                    client_type: 'app',
+                    client_type: 'mobile',
                 }),
             });
 
@@ -151,7 +170,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, route }) =
                 console.log('✅ Login successful');
                 await handleSuccessfulAuth(data);
             } else {
-                setError(data.detail || 'Invalid credentials');
+                setError(getErrorMessage(data, 'Invalid credentials'));
             }
         } catch (error) {
             console.error('Login error:', error);
@@ -187,7 +206,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, route }) =
                     username: form.username,
                     email: form.email,
                     password: form.password,
-                    client_type: 'app',
+                    client_type: 'mobile',
                 }),
             });
 
@@ -214,7 +233,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ navigation, route }) =
                 console.log('✅ Registration successful');
                 await handleSuccessfulAuth(data);
             } else {
-                setError(data.detail || 'Registration failed');
+                setError(getErrorMessage(data, 'Registration failed'));
             }
         } catch (error) {
             console.error('Registration error:', error);

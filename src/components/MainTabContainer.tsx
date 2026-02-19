@@ -22,9 +22,7 @@ import { CourseHomepageScreen } from '../screens/CourseHomepageScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 // import { SearchScreen } from '../screens/course/CourseSearchScreen';
 import { MyCoursesScreen } from '../screens/course/MyCourses';
-import { UploadsOverviewScreen } from '../screens/uploads/UploadsOverviewScreen';
-import { useSubscription } from '../context/SubscriptionContext';
-import { GradesOverviewScreen } from '../screens/grades/GradesOverviewScreen';
+import { KanaScreen } from '../screens/kana/KanaScreen';
 
 // Import navigation components
 import { BottomTabs, TabItem } from '../components/BottomTabs';
@@ -33,7 +31,7 @@ import { NotesListScreen } from '../screens/notes/NotesListScreen';
 
 type NavigationProp = NativeStackNavigationProp<any>;
 
-export type TabScreens = 'home' | 'courses' | 'uploads' | 'notes' | 'profile';
+export type TabScreens = 'home' | 'courses' | 'kana' | 'notes' | 'profile';
 
 interface Props {
     navigation: NavigationProp;
@@ -44,11 +42,8 @@ export const MainTabContainer: React.FC<Props> = ({
     navigation,
     initialTab = 'home'
 }) => {
-        const { status } = useSubscription();
     const { user, token } = useAuth();
     const [activeTab, setActiveTab] = useState<TabScreens>(initialTab);
-    const [uploadsBadgeCount, setUploadsBadgeCount] = useState(0);
-    const [gradesBadgeCount, setGradesBadgeCount] = useState(0);
 
     // Handle hardware back button on Android
     useFocusEffect(
@@ -98,13 +93,6 @@ export const MainTabContainer: React.FC<Props> = ({
 
     const handleTabPress = (tabId: TabScreens) => {
         setActiveTab(tabId);
-
-        // Update badge counts when tab is accessed
-        if (tabId === 'uploads') {
-            setUploadsBadgeCount(0);
-        } else if (tabId === 'notes') {
-            setGradesBadgeCount(0);
-        }
     };
 
     // Don't automatically navigate away - keep tabs visible
@@ -119,13 +107,8 @@ export const MainTabContainer: React.FC<Props> = ({
                 return <CourseHomepageScreen navigation={navigation} />;
             case 'courses':
                 return <MyCoursesScreen navigation={navigation} />;
-                case 'uploads':
-                    if (!status?.active) {
-                        // Redirect to paywall route when no subscription
-                        navigation.navigate('Paywall');
-                        return null;
-                    }
-                    return <UploadsOverviewScreen navigation={navigation as any} route={mockRoute} />;
+            case 'kana':
+                return <KanaScreen navigation={navigation} />;
             case 'notes':
                 return <NotesListScreen navigation={navigation} />;
             case 'profile':
@@ -151,12 +134,11 @@ export const MainTabContainer: React.FC<Props> = ({
             onPress: () => handleTabPress('courses'),
         },
         {
-            id: 'uploads',
-            label: 'Uploads',
-            icon: 'cloud-upload-outline',
-            activeIcon: 'cloud-upload',
-            badge: uploadsBadgeCount,
-            onPress: () => handleTabPress('uploads'),
+            id: 'kana',
+            label: 'Kana',
+            icon: 'chatbubble-ellipses-outline',
+            activeIcon: 'chatbubble-ellipses',
+            onPress: () => handleTabPress('kana'),
         },
         {
             id: 'notes',

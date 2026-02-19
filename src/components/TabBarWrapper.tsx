@@ -39,11 +39,11 @@ export const TabBarWrapper: React.FC<TabBarWrapperProps> = ({
             onPress: () => navigation.navigate('MyCourses'),
         },
         {
-            id: 'uploads',
-            label: 'Uploads',
-            icon: 'cloud-upload-outline',
-            activeIcon: 'cloud-upload',
-            onPress: () => navigation.navigate('UploadsOverview'),
+            id: 'kana',
+            label: 'Kana',
+            icon: 'chatbubble-ellipses-outline',
+            activeIcon: 'chatbubble-ellipses',
+            onPress: () => navigation.navigate('MainTabs', { initialTab: 'kana' }),
         },
         {
             id: 'notes',
