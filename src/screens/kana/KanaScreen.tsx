@@ -17,13 +17,7 @@ import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
-import {
-    RecordingPresets,
-    requestRecordingPermissionsAsync,
-    setAudioModeAsync,
-    useAudioRecorder,
-    useAudioRecorderState,
-} from 'expo-audio';
+import { Audio } from 'expo-av';
 
 import { useAuth } from '../../context/AuthContext';
 import { KanaLearningSession, kanaServices } from '../../services/kanaServices';
@@ -47,9 +41,10 @@ export const KanaScreen: React.FC<Props> = () => {
     const [latestClarifyReply, setLatestClarifyReply] = useState<string | null>(null);
 
     const slideAnim = useRef(new Animated.Value(0)).current;
-    const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-    const recorderState = useAudioRecorderState(audioRecorder);
-    const isRecording = !!recorderState?.isRecording;
+    
+    // expo-av refactor
+    const [recording, setRecording] = useState<Audio.Recording | null>(null);
+    const isRecording = !!recording;
 
     const currentStep = session?.current_step;
     const stepLabel = useMemo(() => {
@@ -164,35 +159,42 @@ export const KanaScreen: React.FC<Props> = () => {
     }, []);
 
     const startRecording = useCallback(async (mode: 'main' | 'clarify') => {
-        try {
-            const permission = await requestRecordingPermissionsAsync();
-            const granted = (permission as any)?.granted ?? (permission as any)?.status === 'granted';
+        try {Audio.requestPermissionsAsync();
+            const granted = permission.granted || permission.status === 'granted';
             if (!granted) {
                 Alert.alert('Kana', 'Microphone permission is required.');
                 return;
             }
 
-            await setAudioModeAsync({
-                playsInSilentMode: true,
-                allowsRecording: true,
-            } as any);
+            await Audio.setAudioModeAsync({
+                playsInSilentModeIOS: true,
+                allowsRecordingIOS: true,
+                staysActiveInBackground: false,
+            });
 
-            await audioRecorder.prepareToRecordAsync();
-            audioRecorder.record();
+            const { recording } = await Audio.Recording.createAsync(
+                Audio.RecordingOptionsPresets.HIGH_QUALITY
+            );
+            
+            setRecording(recording);
             setRecordingMode(mode);
         } catch (error: any) {
             Alert.alert('Kana', error?.message || 'Could not start recording.');
         }
-    }, [audioRecorder]);
+    }, []);
 
     const stopRecordingAndSubmit = useCallback(async () => {
+        if (!recording) return;
+
         try {
-            await audioRecorder.stop();
-            const uri = (audioRecorder as any)?.uri as string | undefined;
-            await setAudioModeAsync({
-                playsInSilentMode: true,
-                allowsRecording: false,
-            } as any);
+            await recording.stopAndUnloadAsync();
+            const uri = recording.getURI();
+            setRecording(null);
+
+            await Audio.setAudioModeAsync({
+                playsInSilentModeIOS: true,
+                allowsRecordingIOS: false,
+            });
 
             if (!uri) {
                 Alert.alert('Kana', 'No audio captured.');
@@ -220,7 +222,7 @@ export const KanaScreen: React.FC<Props> = () => {
             setIsAudioSubmitting(false);
             setRecordingMode(null);
         }
-    }, [audioRecorder, recordingMode, session?.session_id, token]);
+    }, [recording, recordingMode, session?.session_id, token]);
 
     const handleMainMicPress = useCallback(() => {
         if (isAudioSubmitting) return;

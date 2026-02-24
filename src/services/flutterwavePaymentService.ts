@@ -1,6 +1,6 @@
-// Flutterwave Payment Service (Test Mode)
-// NOTE: Do NOT ship real secret keys inside the app bundle. Use secure backend-mediated charges.
-// This client handles creating a subscription payment via Flutterwave Checkout (hosted page) and verifying status.
+// Flutterwave Payment Service (LIVE)
+// All payment logic is backend-mediated — no secret keys in the app bundle.
+// The backend creates Flutterwave checkout links; the app opens them in a browser.
 
 export interface SubscriptionStatus {
   active: boolean;
@@ -13,43 +13,60 @@ export interface InitiatePaymentResult {
   paymentReference: string;
 }
 
-const FLUTTERWAVE_PUBLIC_KEY = process.env.EXPO_PUBLIC_FLUTTERWAVE_PUBLIC_KEY || ''; // Load from env (eas secret)
-// Backend endpoints expected (adjust paths as backend implements):
-// POST /payments/flutterwave/initiate { amount, currency, interval }
-// POST /payments/flutterwave/verify { reference }
-// GET  /subscriptions/status
-
-const API_BASE_URL = 'https://brainink-backend.onrender.com'; // Replace if different.
+const API_BASE_URL = 'https://brainink-backend.onrender.com';
 
 export const flutterwavePaymentService = {
-  async initiateMonthlySubscription(userToken: string): Promise<InitiatePaymentResult> {
+  /**
+   * Ask the backend to create a Flutterwave checkout session.
+   * Returns a URL the user is redirected to for payment.
+   */
+  async initiateMonthlySubscription(userToken: string, userEmail?: string, currency: string = 'USD'): Promise<InitiatePaymentResult> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${userToken}`,
+    };
+    if (userEmail) {
+      headers['X-User-Email'] = userEmail;
+    }
     const res = await fetch(`${API_BASE_URL}/payments/flutterwave/initiate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userToken}` },
-      body: JSON.stringify({ amount: 5, currency: 'USD', interval: 'monthly' })
+      headers,
+      body: JSON.stringify({ amount: 5, currency, interval: 'monthly' }),
     });
-    if (!res.ok) throw new Error('Failed to initiate subscription payment');
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(body || 'Failed to initiate subscription payment');
+    }
     return res.json();
   },
 
+  /**
+   * Tell the backend to verify the payment and activate the subscription.
+   */
   async verifyPayment(userToken: string, reference: string): Promise<SubscriptionStatus> {
     const res = await fetch(`${API_BASE_URL}/payments/flutterwave/verify`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${userToken}` },
-      body: JSON.stringify({ reference })
+      body: JSON.stringify({ reference }),
     });
-    if (!res.ok) throw new Error('Failed to verify payment');
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(body || 'Failed to verify payment');
+    }
     return res.json();
   },
 
+  /**
+   * Check the current subscription status for the logged-in user.
+   */
   async getSubscriptionStatus(userToken: string): Promise<SubscriptionStatus> {
     const res = await fetch(`${API_BASE_URL}/subscriptions/status`, {
-      headers: { Authorization: `Bearer ${userToken}` }
+      headers: { Authorization: `Bearer ${userToken}` },
     });
     if (!res.ok) {
       if (res.status === 404) return { active: false };
       throw new Error('Failed to fetch subscription status');
     }
     return res.json();
-  }
+  },
 };

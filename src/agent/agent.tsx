@@ -16,15 +16,7 @@ import {
     useWindowDimensions,
     Vibration,
 } from 'react-native';
-import {
-    useAudioPlayer,
-    useAudioPlayerStatus,
-    useAudioRecorder,
-    useAudioRecorderState,
-    RecordingPresets,
-    requestRecordingPermissionsAsync,
-    setAudioModeAsync,
-} from 'expo-audio';
+import { Audio } from 'expo-av';
 import { BlurView } from 'expo-blur';
 import * as FileSystem from 'expo-file-system';
 import { Ionicons } from '@expo/vector-icons';
@@ -438,25 +430,14 @@ const KanaAssistantBubble: React.FC<{ message: KanaMessage; index: number; token
     const [ttsState, setTtsState] = useState<'idle' | 'loading' | 'ready' | 'playing' | 'paused' | 'error'>('idle');
     const [error, setError] = useState<string | null>(null);
     const audioUriRef = useRef<string | null>(null);
+    const soundRef = useRef<Audio.Sound | null>(null);
     const messageKey = useMemo(() => buildMessageKey(message, index), [message, index]);
-
-    const player = useAudioPlayer(null);
-    const playerStatus = useAudioPlayerStatus(player);
-
-    useEffect(() => {
-        if ((playerStatus as any)?.didJustFinish) {
-            setTtsState('ready');
-        }
-    }, [playerStatus]);
 
     useEffect(() => {
         return () => {
-            try {
-                player.pause();
-            } catch {
-                // ignore
+            if (soundRef.current) {
+                soundRef.current.unloadAsync();
             }
-
             if (
                 audioUriRef.current &&
                 Platform.OS === 'web' &&
@@ -467,7 +448,7 @@ const KanaAssistantBubble: React.FC<{ message: KanaMessage; index: number; token
             }
             audioUriRef.current = null;
         };
-    }, [player]);
+    }, []);
 
     const ensureAudioFile = useCallback(async () => {
         if (audioUriRef.current) {
@@ -498,7 +479,9 @@ const KanaAssistantBubble: React.FC<{ message: KanaMessage; index: number; token
                 const blob = new Blob([byteArray], { type: result.mime_type || 'audio/wav' });
                 const objectUrl = URL.createObjectURL(blob);
                 audioUriRef.current = objectUrl;
-                player.replace(objectUrl);
+
+                const { sound } = await Audio.Sound.createAsync({ uri: objectUrl });
+                soundRef.current = sound;
                 setTtsState('ready');
                 return objectUrl;
             }
@@ -510,7 +493,9 @@ const KanaAssistantBubble: React.FC<{ message: KanaMessage; index: number; token
                 const mimeType = result.mime_type || 'audio/wav';
                 const dataUri = `data:${mimeType};base64,${result.audio_base64}`;
                 audioUriRef.current = dataUri;
-                player.replace(dataUri);
+                
+                const { sound } = await Audio.Sound.createAsync({ uri: dataUri });
+                soundRef.current = sound;
                 setTtsState('ready');
                 return dataUri;
             }
@@ -520,7 +505,10 @@ const KanaAssistantBubble: React.FC<{ message: KanaMessage; index: number; token
             const fileUri = `${baseDir}kana-tts-${messageKey}.${ext}`;
             await FileSystem.writeAsStringAsync(fileUri, result.audio_base64, { encoding: 'base64' });
             audioUriRef.current = fileUri;
-            player.replace(fileUri);
+            
+            const { sound } = await Audio.Sound.createAsync({ uri: fileUri });
+            soundRef.current = sound;
+
             setTtsState('ready');
             return fileUri;
         } catch (err: any) {
@@ -528,42 +516,54 @@ const KanaAssistantBubble: React.FC<{ message: KanaMessage; index: number; token
             setTtsState('error');
             return null;
         }
-    }, [message.content, messageKey, player, token]);
+    }, [message.content, messageKey, token]);
 
     const handlePlay = useCallback(async () => {
         try {
             // Configure audio mode for playback (required on iOS)
-            await setAudioModeAsync({
-                playsInSilentMode: true,
-                allowsRecording: false,
+            await Audio.setAudioModeAsync({
+                playsInSilentModeIOS: true,
+                allowsRecordingIOS: false,
                 staysActiveInBackground: false,
-            } as any);
+            });
 
             const uri = await ensureAudioFile();
-            if (!uri) return;
+            if (!uri || !soundRef.current) return;
 
-            if ((playerStatus as any)?.didJustFinish) {
-                await player.seekTo(0);
-            }
-            player.play();
+            soundRef.current.setOnPlaybackStatusUpdate((status) => {
+                if (status.isLoaded) {
+                     if (status.didJustFinish) {
+                        setTtsState('ready');
+                        soundRef.current?.setPositionAsync(0);
+                    } else if (status.isPlaying) {
+                        setTtsState('playing');
+                    } else {
+                        // setTtsState('paused'); // or ready
+                    }
+                }
+            });
+
+            await soundRef.current.playAsync();
             setTtsState('playing');
         } catch (err: any) {
             setError(err?.message || 'Could not start playback');
             setTtsState('error');
         }
-    }, [ensureAudioFile, player, playerStatus]);
+    }, [ensureAudioFile]);
 
-    const handlePause = useCallback(() => {
+    const handlePause = useCallback(async () => {
         try {
-            player.pause();
-            setTtsState('paused');
+            if (soundRef.current) {
+                await soundRef.current.pauseAsync();
+                setTtsState('paused');
+            }
         } catch (err: any) {
             setError(err?.message || 'Could not pause playback');
             setTtsState('error');
         }
-    }, [player]);
+    }, []);
 
-    const isPlaying = !!(playerStatus as any)?.playing;
+    const isPlaying = ttsState === 'playing';
     const isLoading = ttsState === 'loading';
 
     return (
@@ -608,18 +608,9 @@ const KanaAssistantBubble: React.FC<{ message: KanaMessage; index: number; token
 
 const buildMessageKey = (message: KanaMessage, fallbackIndex = 0) => {
     const ts = message.timestamp || `${message.role}-${fallbackIndex}`;
-    const snippet = (message.content || '').slice(0, 16) || 'kana';
-    return `${ts}-${snippet}`.replace(/[^a-z0-9]/gi, '-').toLowerCase();
-};
+    const [recording, setRecording] = useState<Audio.Recording | null>(null);
 
-const KanaInput: React.FC<{ onSend: (text: string) => void; onTranscribe: (uri: string) => Promise<void>; isSending: boolean }> = ({ onSend, onTranscribe, isSending }) => {
-    const [text, setText] = useState('');
-    const [isTranscribing, setIsTranscribing] = useState(false);
-    const [error, setError] = useState<string | null>(null);
-
-    const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-    const recorderState = useAudioRecorderState(audioRecorder);
-    const isRecording = !!recorderState?.isRecording;
+    const isRecording = !!recording;
 
     const handleSend = useCallback(() => {
         if (!text.trim()) return;
@@ -630,29 +621,34 @@ const KanaInput: React.FC<{ onSend: (text: string) => void; onTranscribe: (uri: 
     const startRecording = useCallback(async () => {
         try {
             setError(null);
-            const permission = await requestRecordingPermissionsAsync();
-            const granted = (permission as any)?.granted ?? (permission as any)?.status === 'granted';
+            const permission = await Audio.requestPermissionsAsync();
+            const granted = permission.granted;
             if (!granted) {
                 setError('Microphone permission is required');
                 return;
             }
 
-            await setAudioModeAsync({
-                playsInSilentMode: true,
-                allowsRecording: true,
-            } as any);
+            await Audio.setAudioModeAsync({
+                playsInSilentModeIOS: true,
+                allowsRecordingIOS: true,
+            });
 
-            await audioRecorder.prepareToRecordAsync();
-            audioRecorder.record();
+            const { recording } = await Audio.Recording.createAsync(
+                Audio.RecordingOptionsPresets.HIGH_QUALITY
+            );
+            setRecording(recording);
         } catch (err: any) {
             setError(err?.message || 'Could not start recording');
         }
-    }, [audioRecorder]);
+    }, []);
 
     const stopRecording = useCallback(async () => {
+        if (!recording) return;
+
         try {
-            await audioRecorder.stop();
-            const uri = (audioRecorder as any)?.uri as string | undefined;
+            setRecording(null);
+            await recording.stopAndUnloadAsync();
+            const uri = recording.getURI();
 
             if (!uri) {
                 setError('No audio captured');
@@ -666,7 +662,7 @@ const KanaInput: React.FC<{ onSend: (text: string) => void; onTranscribe: (uri: 
         } finally {
             setIsTranscribing(false);
         }
-    }, [audioRecorder, onTranscribe]);
+    }, [recording, onTranscribe]);
 
     const handleRecordPress = useCallback(() => {
         if (isRecording) {
